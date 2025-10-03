@@ -2,7 +2,6 @@ import streamlit as st
 from cv_assessment import CVAssessmentSystem
 import tempfile
 import os
-import json
 
 st.set_page_config(page_title="CV Assessment System", layout="wide")
 
@@ -25,10 +24,12 @@ cv_files = st.file_uploader("Upload Candidate CVs (multiple allowed)", type=["pd
 # --- Run Button ---
 if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os.getenv("OPENAI_API_KEY")):
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Save job requirements
         req_path = os.path.join(tmpdir, req_file.name)
         with open(req_path, "wb") as f:
             f.write(req_file.read())
 
+        # Save CVs
         cv_folder = os.path.join(tmpdir, "cvs")
         os.makedirs(cv_folder, exist_ok=True)
         for file in cv_files:
@@ -48,14 +49,25 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
                 st.markdown(f"**Recommendation:** {c.recommendation.upper()} (Confidence: {c.confidence_level})")
                 st.progress(c.overall_score / 100 if c.overall_score else 0)
 
-                # Score breakdown
+                # ---------- SCORE BREAKDOWN ----------
                 st.subheader("📊 Score Breakdown")
-                st.write(f"**Experience:** {c.experience_score}/100")
-                st.write(f"**Skills:** {c.skills_score}/100")
-                st.write(f"**Education:** {c.education_score}/100")
-                st.write(f"**Cultural Fit:** {c.cultural_fit_score}/100")
 
-                # Strengths & Weaknesses
+                def colored_bar(label, score):
+                    if score >= 80:
+                        color = "🟢"
+                    elif score >= 50:
+                        color = "🟡"
+                    else:
+                        color = "🔴"
+                    st.write(f"**{label}: {score}/100 {color}**")
+                    st.progress(score / 100 if score else 0)
+
+                colored_bar("Experience", c.experience_score)
+                colored_bar("Skills", c.skills_score)
+                colored_bar("Education", c.education_score)
+                colored_bar("Cultural Fit", c.cultural_fit_score)
+
+                # ---------- STRENGTHS & WEAKNESSES ----------
                 st.subheader("✅ Strengths")
                 if c.key_strengths:
                     for s in c.key_strengths:
@@ -70,11 +82,11 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
                 else:
                     st.info("No weaknesses identified.")
 
-                # Executive Summary (scrollable)
+                # ---------- EXECUTIVE SUMMARY ----------
                 st.subheader("📝 Executive Summary")
                 try:
                     summary = c.executive_summary
-                    if isinstance(summary, dict):  # if model returned JSON-like
+                    if isinstance(summary, dict):
                         st.markdown("**What they have:**")
                         st.write(summary.get("have", ""))
                         st.markdown("**What they lack:**")
@@ -88,7 +100,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
                 except Exception:
                     st.text_area("Executive Summary", str(c.executive_summary), height=300)
 
-                # Why This Score (scrollable)
+                # ---------- WHY THIS SCORE ----------
                 st.subheader("💡 Why This Score")
                 try:
                     explanation = c.why_this_score
@@ -106,10 +118,22 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
                 except Exception:
                     st.text_area("Why This Score", str(c.why_this_score), height=300)
 
-                # Interview focus areas
+                # ---------- INTERVIEW FOCUS AREAS ----------
                 st.subheader("🎯 Interview Focus Areas")
                 if c.interview_focus_areas:
                     for i in c.interview_focus_areas:
                         st.markdown(f"- {i}")
                 else:
                     st.info("No interview focus areas suggested.")
+
+                # ---------- CRITICAL GAPS ----------
+                if c.critical_gaps:
+                    st.subheader("🚨 Critical Gaps")
+                    for g in c.critical_gaps:
+                        st.markdown(f"- {g}")
+
+                # ---------- RED FLAGS ----------
+                if c.red_flags:
+                    st.subheader("⛔ Red Flags")
+                    for r in c.red_flags:
+                        st.markdown(f"- {r}")
