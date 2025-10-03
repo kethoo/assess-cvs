@@ -119,6 +119,7 @@ CRITICAL INSTRUCTIONS:
 - For every requirement, explicitly state what the candidate HAS and what they DO NOT HAVE.
 - Cite CV evidence with dates, numbers, projects, company names.
 - Justify scores with detailed reasoning.
+- All numeric scores must be integers between 0 and 100.
 
 JOB REQUIREMENTS:
 {self.job_requirements[:4000]}
@@ -127,35 +128,44 @@ CANDIDATE CV:
 {cv_text[:5000]}
 
 ===================================================================
-ASSESSMENT TASK
+OUTPUT FORMAT
 ===================================================================
-
-1. REQUIREMENT MATCHING
-- For each requirement: quote CV evidence, explain context, note missing parts.
-- Rate: FULLY / MOSTLY / PARTIALLY / NOT MET.
-
-2. SCORING (Experience, Skills, Education, Cultural Fit)
-- Show breakdowns.
-- For each: what the candidate HAS, what they DO NOT HAVE, how missing parts reduce score.
-
-3. EXECUTIVE SUMMARY
-- Must be at least 3–4 full paragraphs.
-- Separate what they HAVE vs what they LACK.
-- Explain risks/gaps in detail.
-- End with a recommendation.
-
-4. WHY THIS SCORE
-- Long explanation of why the candidate got this exact score.
-- List fully met requirements vs partially met vs missing.
-- Explain why score is not higher (what’s missing) and not lower (what they do have).
-
-5. FINAL RECOMMENDATION
-- Recommendation + confidence.
-- Justify with evidence from CV and requirements.
-- Mention gaps that may affect success.
-
-Return ONLY valid JSON with all required fields.
+Return ONLY valid JSON with ALL of these keys:
+- candidate_name
+- overall_score (int 0–100)
+- fit_level
+- experience_score (int 0–100)
+- experience_explanation
+- skills_score (int 0–100)
+- skills_explanation
+- education_score (int 0–100)
+- education_explanation
+- cultural_fit_score (int 0–100)
+- cultural_fit_explanation
+- requirements_met
+- critical_gaps
+- key_strengths
+- key_weaknesses
+- missing_requirements
+- score_breakdown
+- why_this_score
+- recommendation
+- recommendation_reasoning
+- confidence_level
+- interview_focus_areas
+- red_flags
+- potential_concerns
+- executive_summary
+- salary_recommendation
 """
+
+        def safe_int(d, key, default=0):
+            """Ensure numeric values are returned as ints between 0–100"""
+            try:
+                val = int(d.get(key, default))
+                return max(0, min(val, 100))
+            except:
+                return default
 
         try:
             response = self.client.chat.completions.create(
@@ -163,7 +173,7 @@ Return ONLY valid JSON with all required fields.
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an expert HR professional. Always return ultra-detailed JSON. Include both what the candidate HAS and what they DO NOT HAVE."
+                        "content": "You are an expert HR professional. Always return ultra-detailed JSON. Include both what the candidate HAS and what they DO NOT HAVE. Ensure all numeric scores are integers 0–100."
                     },
                     {"role": "user", "content": prompt}
                 ],
@@ -177,15 +187,15 @@ Return ONLY valid JSON with all required fields.
             return CandidateAssessment(
                 candidate_name=assessment_data.get("candidate_name", "Unknown"),
                 filename=filename,
-                overall_score=assessment_data.get("overall_score", 0),
+                overall_score=safe_int(assessment_data, "overall_score", 0),
                 fit_level=assessment_data.get("fit_level", "Unknown"),
-                experience_score=assessment_data.get("experience_score", 0),
+                experience_score=safe_int(assessment_data, "experience_score", 0),
                 experience_explanation=assessment_data.get("experience_explanation", ""),
-                skills_score=assessment_data.get("skills_score", 0),
+                skills_score=safe_int(assessment_data, "skills_score", 0),
                 skills_explanation=assessment_data.get("skills_explanation", ""),
-                education_score=assessment_data.get("education_score", 0),
+                education_score=safe_int(assessment_data, "education_score", 0),
                 education_explanation=assessment_data.get("education_explanation", ""),
-                cultural_fit_score=assessment_data.get("cultural_fit_score", 0),
+                cultural_fit_score=safe_int(assessment_data, "cultural_fit_score", 0),
                 cultural_fit_explanation=assessment_data.get("cultural_fit_explanation", ""),
                 requirements_met=assessment_data.get("requirements_met", []),
                 critical_gaps=assessment_data.get("critical_gaps", []),
