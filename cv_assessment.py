@@ -23,7 +23,6 @@ class CVAssessmentSystem:
 
     def load_job_requirements(self, file_path: str) -> str:
         """Load tender or job requirements from Word or PDF file (auto-detects type)."""
-        # Detect file type by header instead of relying on extension
         with open(file_path, "rb") as f:
             header = f.read(4)
 
@@ -31,7 +30,6 @@ class CVAssessmentSystem:
             if header.startswith(b"%PDF"):
                 text = self._extract_text_from_pdf(file_path)
             else:
-                # assume Word if not a PDF
                 text = self._extract_text_from_word(file_path)
         except Exception as e:
             raise ValueError(f"Cannot read file {file_path}: {e}")
@@ -180,12 +178,61 @@ CANDIDATE CV:
     # ------------------- CRITICAL + TAILORING MODE -------------------
 
     def _assess_candidate_critical(self, filename: str, cv_text: str) -> Dict[str, Any]:
-        """Critical narrative evaluation with evaluation table, reasoning, and keyword recommendations."""
-        prompt = f"""
-You are a senior evaluator and HR specialist for EU/World Bank tenders.
+        """Critical narrative evaluation with hybrid donor detection (semantic + regex fallback)."""
 
-TASK:
-Perform a **Critical Evaluation** of the following candidate’s CV compared to the JOB REQUIREMENTS.
+        # ---------- 1️⃣ Try semantic donor detection via GPT ----------
+        donor_query = f"""
+        Identify the main funding organization mentioned or implied in this tender.
+        Return ONLY the donor name (e.g., 'World Bank', 'European Union', 'ADB', 'USAID', 'UNDP', 'AfDB', 'Unknown').
+        If uncertain, answer exactly 'Unknown'.
+        TENDER TEXT (excerpt):
+        {self.job_requirements[:2500]}
+        """
+        donor_match = "Unknown"
+        try:
+            resp = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": donor_query}],
+                temperature=0,
+                max_tokens=10,
+            )
+            donor_match = resp.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"⚠️ Donor semantic detection failed, fallback triggered: {e}")
+
+        # ---------- 2️⃣ Cheap regex safety net ----------
+        text_lower = self.job_requirements.lower()
+        donors = {
+            "World Bank": r"\b(world\s*bank|wbg|ifc|ida|ibrd)\b",
+            "European Union": r"\b(european\s*union|eu\s+delegation|europeaid|neighbourhood|dg\s*intl)\b",
+            "Asian Development Bank": r"\b(asian\s+development\s+bank|adb)\b",
+            "USAID": r"\b(usaid|united\s+states\s+agency\s+for\s+international\s+development)\b",
+            "African Development Bank": r"\b(african\s+development\s+bank|afdb)\b",
+            "UNDP": r"\b(undp|united\s+nations\s+development\s+programme)\b",
+        }
+
+        if donor_match == "Unknown":
+            for name, pattern in donors.items():
+                if re.search(pattern, text_lower):
+                    donor_match = name
+                    break
+        if donor_match == "Unknown":
+            donor_match = "General donor context"
+
+        # ---------- 3️⃣ Build the evaluation prompt ----------
+        prompt = f"""
+You are a senior evaluator assessing candidates for a tender funded by **{donor_match}**.
+
+Perform a detailed, evidence-based critical evaluation of the candidate’s CV
+against the JOB REQUIREMENTS and contextualize every criterion according to {donor_match}'s
+typical focus and terminology.
+
+If {donor_match} = "World Bank", emphasize implementation, procurement, M&E, and reporting.
+If {donor_match} = "European Union", emphasize service contracts, key expert roles, and TA projects.
+If {donor_match} = "Asian Development Bank", emphasize capacity building and regional cooperation.
+If {donor_match} = "USAID", emphasize governance, performance monitoring, and stakeholder engagement.
+If {donor_match} = "UNDP", emphasize institutional strengthening and sustainability.
+If {donor_match} = "African Development Bank", emphasize public sector reform and infrastructure management.
 
 ---
 
@@ -202,64 +249,54 @@ Perform a **Critical Evaluation** of the following candidate’s CV compared to 
 | **Specific Expert Requirements (80% weight)** | Team leadership and management |  |  |  |
 |  | Relevant domain expertise |  |  |  |
 |  | Technical or regulatory knowledge |  |  |  |
-|  | Donor project experience (EU/WB/ADB, etc.) |  |  |  |
+|  | Donor project experience ({donor_match}) |  |  |  |
 |  | Communication and coordination skills |  |  |  |
 |  | Educational background |  |  |  |
 |  | Analytical and reporting skills |  |  |  |
 |  | Language proficiency |  |  |  |
 
-Fill **all cells** with numeric scores (0–1), confidence (High/Medium/Low), and concise evaluator commentary (1–3 sentences each).
+Each cell must contain a numeric score (0–1), confidence (High/Medium/Low), and concise commentary (1–3 sentences).
 
-After the table, add:
-**Final Weighted Score (consider 80% expert requirements, 20% tender context): X.XX / 1.00**
+After the table, show:
+**Final Weighted Score (80% expert, 20% context): X.XX / 1.00**
 
 ---
 
 **📊 Critical Summary**
-Summarize overall alignment with project and expert role (2–3 paragraphs). Be analytical and cite evidence.
+Summarize alignment with {donor_match} project style and focus.
 
 **📉 Evaluator Summary**
-Summarize 3–5 key takeaways, e.g.:
-- Strong alignment with donor project management
-- Missing direct regulatory enforcement experience
-- Excellent educational background, etc.
+List 3–5 short key takeaways (strengths, gaps, donor-fit).
 
 **📌 Strengths & Weaknesses**
-List at least 3 strengths and 3 weaknesses with evidence.
+Provide at least 3 evidence-based strengths and 3 weaknesses.
 
 **✂️ Tailoring Suggestions (How to Strengthen CV for This Role)**
 
 **a. Rewriting & Emphasis Suggestions**
-List concrete, text-level suggestions (e.g., “Emphasize experience with EU-funded TA projects in executive summary.”)
+Suggest specific text-level improvements or section reorderings to match {donor_match}’s terminology.
 
 **b. 🪶 Word Recommendations (Tender Keyword Alignment)**
-List 5–10 **keyword alignment suggestions**.
-Provide a markdown table like:
+Provide 5–10 recommended keyword alignments based on {donor_match}’s phrasing.
 
-| Current CV Wording | Recommended Tender Keyword | Why |
-|--------------------|-----------------------------|-----|
-| "Managed donor projects" | "Led EU-funded Technical Assistance projects" | Aligns with EU terminology. |
-| "Worked with local stakeholders" | "Coordinated institutional counterparts and regulatory agencies" | Matches ToR phrasing. |
+| Current CV Wording | Recommended {donor_match} Keyword | Why |
+|--------------------|----------------------------------|-----|
+| "Project manager" | "Implementation support consultant under {donor_match} framework" | Aligns with {donor_match} terminology. |
+| "Drafted reports" | "Prepared deliverables per {donor_match} quality control protocols" | Matches donor QA phrasing. |
+| "Policy development" | "Institutional reform and capacity-building support" | Fits {donor_match} operational tone. |
 
 ---
 
 ### CONTEXT INPUTS
 
-**General Tender Context (20%)**
+**Tender Context (20%)**
 {self.job_requirements[:4000]}
 
-**CANDIDATE CV**
+**Candidate CV**
 {cv_text[:9000]}
-
----
-
-INSTRUCTIONS:
-- Be detailed, structured, and realistic.
-- Always include numeric scores, reasoning, and commentary.
-- Never skip sections or placeholders.
-- Use professional EU evaluator tone throughout.
 """
 
+        # ---------- 4️⃣ Call the model for evaluation ----------
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o",
@@ -267,9 +304,9 @@ INSTRUCTIONS:
                     {
                         "role": "system",
                         "content": (
-                            "You are a senior HR evaluator for donor-funded tenders. "
-                            "Always produce detailed, structured markdown reports with reasoning. "
-                            "Include numeric scores, commentary, and keyword recommendations."
+                            "You are a senior evaluator for international tenders. "
+                            "Produce a full markdown report with scores, commentary, and rewording recommendations. "
+                            "Always include the evaluation table and numeric final score."
                         ),
                     },
                     {"role": "user", "content": prompt},
@@ -284,7 +321,7 @@ INSTRUCTIONS:
 
             return {
                 "candidate_name": filename,
-                "report": report_text,
+                "report": f"**Detected Donor Context:** {donor_match}\n\n" + report_text,
                 "final_score": final_score,
             }
 
