@@ -87,11 +87,11 @@ class CVAssessmentSystem:
         return "\n".join(text)
 
     def _extract_text_from_word(self, file_path: str) -> str:
-        """Extract text from Word document, preserving order of paragraphs and tables."""
+        """Extract text from Word document, preserving order and merging fragmented lines."""
+        from docx import Document
         from docx.document import Document as _Document
         from docx.table import Table
         from docx.text.paragraph import Paragraph
-        from docx import Document
     
         def iter_block_items(parent):
             """Yield paragraphs and tables in document order."""
@@ -106,20 +106,33 @@ class CVAssessmentSystem:
                     yield Paragraph(child, parent)
     
         doc = Document(file_path)
-        text_chunks = []
-    
+        blocks = []
         for block in iter_block_items(doc):
             if isinstance(block, Paragraph):
                 text = block.text.strip()
                 if text:
-                    text_chunks.append(text)
+                    blocks.append(text)
             elif isinstance(block, Table):
                 for row in block.rows:
                     row_text = " ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
                     if row_text:
-                        text_chunks.append(row_text)
+                        blocks.append(row_text)
     
-        return "\n".join(text_chunks)
+        # Merge very short lines with the next block (fixes broken expert headings)
+        merged = []
+        skip_next = False
+        for i, b in enumerate(blocks):
+            if skip_next:
+                skip_next = False
+                continue
+            if len(b) < 50 and i + 1 < len(blocks):
+                merged.append(b + " " + blocks[i + 1])
+                skip_next = True
+            else:
+                merged.append(b)
+    
+        return "\n".join(merged)
+
 
 
 
