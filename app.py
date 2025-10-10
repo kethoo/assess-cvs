@@ -2,6 +2,7 @@ import streamlit as st
 from cv_assessment import CVAssessmentSystem
 import tempfile
 import os
+import re
 
 st.set_page_config(page_title="Deep CV Assessment System", layout="wide")
 st.title("📄 Deep CV Assessment System")
@@ -13,7 +14,7 @@ api_key = st.text_input("🔑 Enter OpenAI API Key", type="password")
 mode = st.radio("Select Evaluation Mode:", ["Structured (Dashboard)", "Critical Narrative"])
 
 # --- Upload Tender ---
-req_file = st.file_uploader("📄 Upload Tender / Job Description (general context)", type=["pdf", "docx", "doc"])
+req_file = st.file_uploader("📄 Upload Tender / Job Description", type=["pdf", "docx", "doc"])
 tender_text = ""
 
 if req_file:
@@ -22,25 +23,34 @@ if req_file:
         tmp.write(req_file.read())
         tender_path = tmp.name
 
-    st.success(f"✅ Tender file uploaded: {req_file.name}")
+    st.success(f"✅ Tender uploaded: {req_file.name}")
 
-    # Load the general tender context
+    # Load tender text
     system_temp = CVAssessmentSystem(api_key=api_key or None)
     tender_text = system_temp.load_job_requirements(tender_path)
+    st.info("📘 Tender text loaded successfully.")
 
-# --- Manual Expert Input ---
-st.markdown("### ✍️ Enter or paste the specific Expert Role requirements below")
-expert_text = st.text_area(
-    "Paste the text of the role you are assessing for (from the tender’s expert section or custom JD).",
-    placeholder=(
-        "Example:\n"
-        "Key Expert 1 – Road Traffic Expert (Team Leader):\n"
-        "- Master’s degree in technical sciences or equivalent\n"
-        "- 10 years of experience in road transport policy or safety management\n"
-        "- Proven experience leading EU-funded TA projects\n"
-    ),
-    height=250
+# --- Expert Name Input ---
+st.markdown("### 🎯 Enter the Expert Role Title (exactly as in the tender file)")
+expert_name = st.text_input(
+    "Example: Key Expert 1 Road Traffic Expert - Team Leader",
+    placeholder="Enter the expert role title here..."
 )
+
+# Function to extract specific expert section from the tender
+def extract_expert_section(full_text: str, expert_name: str) -> str:
+    if not full_text or not expert_name:
+        return ""
+    # Find the section starting with the expert name
+    pattern = re.compile(
+        rf"({re.escape(expert_name)}.*?)(?=(?:Key|Non[- ]?Key)\s*Expert|$)",
+        re.IGNORECASE | re.DOTALL
+    )
+    match = pattern.search(full_text)
+    if match:
+        return match.group(1).strip()
+    else:
+        return ""
 
 # --- Upload CVs ---
 cv_files = st.file_uploader(
@@ -49,13 +59,12 @@ cv_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-# --- Run Assessment Button ---
-if st.button("🚀 Run Assessment") and req_file and cv_files and expert_text.strip() and (api_key or os.getenv("OPENAI_API_KEY")):
+# --- Run Button ---
+if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.strip() and (api_key or os.getenv("OPENAI_API_KEY")):
     with tempfile.TemporaryDirectory() as tmpdir:
         cv_folder = os.path.join(tmpdir, "cvs")
         os.makedirs(cv_folder, exist_ok=True)
 
-        # Save uploaded CVs
         for file in cv_files:
             path = os.path.join(cv_folder, file.name)
             with open(path, "wb") as f:
@@ -63,17 +72,25 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_text.st
 
         st.info("⏳ Processing CVs — please wait...")
 
-        # Initialize the system
         system = CVAssessmentSystem(api_key=api_key or None)
 
-        # Weighted combination of tender context (20%) and expert requirements (80%)
-        combined_text = (
-            f"--- GENERAL TENDER CONTEXT (20% weight) ---\n\n"
-            f"{tender_text[:5000]}\n\n"
-            f"--- SPECIFIC EXPERT REQUIREMENTS (80% weight) ---\n\n"
-            f"{expert_text.strip()}"
-        )
+        # Extract specific expert section from tender
+        expert_section = extract_expert_section(tender_text, expert_name)
 
+        if not expert_section:
+            st.warning("⚠️ Could not find that expert in the tender. The full tender will be used as fallback context.")
+            combined_text = tender_text
+        else:
+            combined_text = (
+                f"--- GENERAL TENDER CONTEXT (20% weight) ---\n\n"
+                f"{tender_text[:5000]}\n\n"
+                f"--- SPECIFIC EXPERT REQUIREMENTS (80% weight) ---\n\n"
+                f"{expert_section}"
+            )
+            st.success(f"✅ Extracted expert section for: {expert_name}")
+            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:2000], height=250)
+
+        # Set as job requirements
         system.job_requirements = combined_text
 
         # Process CVs
@@ -92,7 +109,6 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_text.st
         # ---------- CRITICAL NARRATIVE MODE ----------
         else:
             ranked = sorted(results, key=lambda x: x.get("final_score", 0), reverse=True)
-
             st.markdown("## 🏆 Candidate Ranking (Based on Final Scores)")
             st.table([
                 {"Rank": i + 1, "Candidate": r["candidate_name"], "Final Score": f"{r['final_score']:.2f}"}
@@ -109,8 +125,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_text.st
                             st.markdown("✂️ Tailoring Suggestions" + tailoring)
                     else:
                         st.markdown(report)
-
                     st.markdown(f"**🧮 Final Score:** {r['final_score']:.2f} / 1.00")
 else:
-    if not expert_text.strip():
-        st.warning("⚠️ Please paste the specific expert requirements before running the assessment.")
+    if not expert_name.strip():
+        st.warning("⚠️ Please enter the expert name before running the assessment.")
