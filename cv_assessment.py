@@ -35,7 +35,7 @@ class CVAssessmentSystem:
 
     # ------------------- PROCESSING CANDIDATE CVS -------------------
 
-    def process_cv_folder(self, folder_path: str, mode: str = "detailed") -> List[CandidateAssessment]:
+    def process_cv_folder(self, folder_path: str, mode: str = "structured") -> List[CandidateAssessment]:
         """Process all CVs in a folder"""
         cv_files = []
         for ext in ["*.pdf", "*.PDF", "*.doc", "*.DOC", "*.docx", "*.DOCX"]:
@@ -43,20 +43,23 @@ class CVAssessmentSystem:
 
         print(f"🔍 Found {len(cv_files)} CV files in {folder_path}")
         if not cv_files:
-            print("⚠️ No CV files found! Check that your uploads are saved correctly.")
+            print("⚠️ No CV files found! Check uploads.")
             return []
 
         for cv_file in cv_files:
             try:
                 print(f"🧾 Processing: {cv_file.name}")
                 cv_text = self._extract_cv_text(cv_file)
-                assessment = self._assess_candidate(cv_file.name, cv_text)
-                self.assessments.append(assessment)
+                if mode == "critical":
+                    report = self._assess_candidate_critical(cv_file.name, cv_text)
+                    self.assessments.append(report)
+                else:
+                    assessment = self._assess_candidate_structured(cv_file.name, cv_text)
+                    self.assessments.append(assessment)
             except Exception as e:
                 print(f"❌ Error processing {cv_file.name}: {e}")
                 continue
 
-        self.assessments.sort(key=lambda x: x.overall_score, reverse=True)
         print(f"✅ Completed assessments for {len(self.assessments)} candidates.")
         return self.assessments
 
@@ -89,126 +92,33 @@ class CVAssessmentSystem:
                     text.append(cell.text)
         return "\n".join(text)
 
-    # ------------------- CORE ASSESSMENT -------------------
+    # ------------------- STRUCTURED (JSON) ASSESSMENT -------------------
 
-    def _assess_candidate(self, filename: str, cv_text: str) -> CandidateAssessment:
-        """Deep, reasoned candidate assessment using GPT"""
-
+    def _assess_candidate_structured(self, filename: str, cv_text: str) -> CandidateAssessment:
+        """Structured scoring (dashboard mode)"""
         prompt = f"""
-You are a senior HR director and hiring expert. Perform a DEEP SEMANTIC ASSESSMENT of this candidate’s CV.
-
-INSTRUCTIONS:
-- Go beyond keywords. Infer skills, leadership, adaptability, and problem-solving.
-- Compare the candidate against the JOB REQUIREMENTS in detail.
-- Write LONG, PRECISE, and HUMAN-style reasoning.
-- Explicitly explain what they HAVE, what they LACK, and WHY it matters.
-- In “Job Fit,” analyze matched and missing requirements with paragraph-level reasoning.
-- In “Recommendation,” write a professional, paragraph-style hiring analysis.
+You are an HR evaluator performing a structured, detailed candidate assessment.
+Compare the candidate’s CV to the job requirements, scoring Education, Experience, Skills, and Job Fit.
+Provide a long explanation for each score but output valid JSON exactly as specified.
 
 JOB REQUIREMENTS:
 {self.job_requirements[:7000]}
 
 CANDIDATE CV:
 {cv_text[:9000]}
-
-==============================
-OUTPUT FORMAT (STRICT JSON)
-==============================
-{{
-  "candidate_name": "",
-  "summary": {{
-    "headline": "",
-    "total_experience_years": 0,
-    "key_domains": [],
-    "overall_fit_score": 0,
-    "fit_level": "",
-    "summary_reasoning": ""
-  }},
-  "scoring_breakdown": {{
-    "education": {{
-      "score": 0,
-      "weight": 0.20,
-      "details": {{
-        "degrees": [],
-        "relevance": "",
-        "strengths": [],
-        "gaps": [],
-        "reasoning": ""
-      }}
-    }},
-    "experience": {{
-      "score": 0,
-      "weight": 0.40,
-      "details": {{
-        "total_years": 0,
-        "roles": [],
-        "key_projects": [],
-        "transferable_skills": [],
-        "gaps": [],
-        "reasoning": ""
-      }}
-    }},
-    "skills": {{
-      "score": 0,
-      "weight": 0.25,
-      "details": {{
-        "skills_matched": [],
-        "skills_missing": [],
-        "certifications": [],
-        "reasoning": ""
-      }}
-    }},
-    "job_specific_fit": {{
-      "score": 0,
-      "weight": 0.15,
-      "details": {{
-        "alignment_summary": "",
-        "matched_requirements": [],
-        "missing_requirements": [],
-        "reasoning": ""
-      }}
-    }}
-  }},
-  "weighted_score_total": 0,
-  "executive_summary": {{
-    "have": "",
-    "lack": "",
-    "risks_gaps": [],
-    "recommendation": ""
-  }},
-  "recommendation": {{
-    "verdict": "",
-    "confidence": "",
-    "rationale": ""
-  }},
-  "interview_focus_areas": [],
-  "red_flags": [],
-  "potential_concerns": [],
-  "assessed_at": ""
-}}
 """
-
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are an expert HR professional and analyst. "
-                            "Return long, deeply reasoned multi-paragraph analyses only. "
-                            "Always ensure JSON output is complete and valid."
-                        ),
-                    },
+                    {"role": "system", "content": "You are an expert HR evaluator returning long, justified JSON output only."},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
                 max_tokens=9000,
             )
-
             content = self._clean_json(response.choices[0].message.content)
             data = json.loads(content)
-
             return CandidateAssessment(
                 candidate_name=data.get("candidate_name", filename),
                 filename=filename,
@@ -226,9 +136,8 @@ OUTPUT FORMAT (STRICT JSON)
                 potential_concerns=data.get("potential_concerns", []),
                 assessed_at=datetime.now().isoformat(),
             )
-
         except Exception as e:
-            print(f"❌ Assessment error for {filename}: {e}")
+            print(f"❌ Assessment error: {e}")
             return CandidateAssessment(
                 candidate_name="Error",
                 filename=filename,
@@ -247,8 +156,45 @@ OUTPUT FORMAT (STRICT JSON)
                 assessed_at=datetime.now().isoformat(),
             )
 
+    # ------------------- CRITICAL NARRATIVE MODE -------------------
+
+    def _assess_candidate_critical(self, filename: str, cv_text: str) -> Dict[str, Any]:
+        """Generate a detailed evaluator-style narrative report."""
+        prompt = f"""
+You are a senior evaluator for an international development agency (World Bank / ADB / EU).
+Prepare a CRITICAL EVALUATION of this candidate written as if scoring a proposal.
+
+STYLE:
+- Highly detailed and professional, in Markdown.
+- Use clear sections like:
+  🧭 Critical Evaluation – [Candidate Name]
+  Criterion | Score (0–1) | Confidence | Evaluator Commentary
+- Include weighted summary tables and evaluator-style commentary paragraphs.
+- Be critical, evidence-based, and explicit about weaknesses.
+
+JOB REQUIREMENTS:
+{self.job_requirements[:7000]}
+
+CANDIDATE CV:
+{cv_text[:9000]}
+"""
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are a rigorous evaluator producing long, structured markdown reports with critical commentary and tables."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=7000,
+            )
+            return {"candidate_name": filename, "report": response.choices[0].message.content}
+        except Exception as e:
+            return {"candidate_name": filename, "report": f"❌ Error generating critical evaluation: {e}"}
+
+    # ------------------- JSON CLEANUP -------------------
+
     def _clean_json(self, content: str) -> str:
-        """Clean model output for safe JSON parsing"""
         content = content.strip()
         if content.startswith("```json"):
             content = content[7:-3]
