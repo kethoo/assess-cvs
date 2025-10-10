@@ -43,9 +43,10 @@ def extract_expert_section(full_text: str, expert_name: str) -> str:
         return ""
     # Find the section starting with the expert name
     pattern = re.compile(
-        rf"({re.escape(expert_name)}.*?)(?=(?:Key|Non[- ]?Key)\s*Expert|$)",
+        rf"({re.escape(expert_name)}.*?)(?=(?:\n[A-Z].*?Expert|Definitions|$))",
         re.IGNORECASE | re.DOTALL
-    )
+)
+
     match = pattern.search(full_text)
     if match:
         return match.group(1).strip()
