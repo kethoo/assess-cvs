@@ -9,13 +9,14 @@ st.title("📄 Deep CV Assessment System")
 api_key = st.text_input("🔑 Enter OpenAI API Key", type="password")
 mode = st.radio("Select Evaluation Mode:", ["Structured (Dashboard)", "Critical Narrative"])
 
-# --- Upload tender ---
+# --- Upload Tender ---
 req_file = st.file_uploader("📄 Upload Tender / Job Description", type=["pdf", "docx", "doc"])
 selected_expert = None
 job_text = ""
 
 if req_file:
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+    suffix = os.path.splitext(req_file.name)[1] or ".pdf"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(req_file.read())
         tender_path = tmp.name
 
@@ -47,17 +48,15 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
         st.info("⏳ Processing CVs — please wait...")
         system = CVAssessmentSystem(api_key=api_key or None)
 
-        # Use the selected expert section if chosen
         if selected_expert and job_text:
             system.job_requirements = job_text
         else:
             system.load_job_requirements(tender_path)
 
         results = system.process_cv_folder(cv_folder, mode="critical" if mode == "Critical Narrative" else "structured")
-
         st.success(f"✅ Processed {len(results)} candidate(s)")
 
-        # ---------- Structured Mode ----------
+        # ---------- STRUCTURED MODE ----------
         if mode == "Structured (Dashboard)":
             ranked = sorted(results, key=lambda x: x.overall_score, reverse=True)
             st.markdown("## 🏆 Candidate Ranking (Based on Structured Scores)")
@@ -66,7 +65,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
                 for i, r in enumerate(ranked)
             ])
 
-        # ---------- Critical Narrative Mode ----------
+        # ---------- CRITICAL NARRATIVE MODE ----------
         else:
             ranked = sorted(results, key=lambda x: x.get("final_score", 0), reverse=True)
             for r in ranked:
