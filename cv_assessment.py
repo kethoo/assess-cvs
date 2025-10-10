@@ -22,14 +22,20 @@ class CVAssessmentSystem:
     # ------------------- LOAD TENDER & JOB REQUIREMENTS -------------------
 
     def load_job_requirements(self, file_path: str) -> str:
-        """Load tender or job requirements from Word or PDF file"""
-        file_extension = Path(file_path).suffix.lower()
-        if file_extension == ".pdf":
-            text = self._extract_text_from_pdf(file_path)
-        elif file_extension in [".doc", ".docx"]:
-            text = self._extract_text_from_word(file_path)
-        else:
-            raise ValueError(f"Unsupported file format: {file_extension}")
+        """Load tender or job requirements from Word or PDF file (auto-detects type)."""
+        # Detect file type by header instead of relying on extension
+        with open(file_path, "rb") as f:
+            header = f.read(4)
+
+        try:
+            if header.startswith(b"%PDF"):
+                text = self._extract_text_from_pdf(file_path)
+            else:
+                # assume Word if not a PDF
+                text = self._extract_text_from_word(file_path)
+        except Exception as e:
+            raise ValueError(f"Cannot read file {file_path}: {e}")
+
         self.job_requirements = text
         print(f"✅ Loaded job requirements from: {file_path}")
         return text
@@ -46,7 +52,7 @@ class CVAssessmentSystem:
 
         pattern = re.compile(
             r"(Key|Non[- ]Key)\s*Expert\s*\d+\s*[-–]\s*[A-Za-z0-9 ,&()\/\-]+(?:(?:\n|.)*?)(?=(?:Key|Non[- ]Key)\s*Expert\s*\d+|$)",
-            re.IGNORECASE
+            re.IGNORECASE,
         )
         sections = pattern.finditer(text)
         for m in sections:
@@ -136,7 +142,6 @@ class CVAssessmentSystem:
         prompt = f"""
 You are an HR evaluator performing a structured, detailed assessment of a candidate.
 
-TASK:
 Compare the candidate’s CV to the job requirements below.
 Assign numeric scores (0–100) and provide detailed reasoning for:
 - Education
@@ -278,7 +283,6 @@ Always include: **Final Score (weighted average): X.XX / 1.00**
         content = content.strip()
         content = re.sub(r"^```(json)?", "", content)
         content = re.sub(r"```$", "", content)
-        content = content.strip()
         match = re.search(r"(\{.*\})", content, re.DOTALL)
         if match:
             return match.group(1).strip()
