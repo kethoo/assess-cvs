@@ -1,5 +1,6 @@
 import os
 from cv_assessment import CVAssessmentSystem
+import json
 
 def main():
     print("=== DEEP CV ASSESSMENT SYSTEM ===")
