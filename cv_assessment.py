@@ -38,7 +38,6 @@ class CVAssessmentSystem:
     def process_cv_folder(self, folder_path: str, mode: str = "detailed") -> List[CandidateAssessment]:
         """Process all CVs in a folder"""
         cv_files = []
-        # Handle both lower- and upper-case extensions
         for ext in ["*.pdf", "*.PDF", "*.doc", "*.DOC", "*.docx", "*.DOCX"]:
             cv_files.extend(Path(folder_path).glob(ext))
 
@@ -96,15 +95,15 @@ class CVAssessmentSystem:
         """Deep, reasoned candidate assessment using GPT"""
 
         prompt = f"""
-You are a **senior HR director** and **domain expert**. Perform a **deep semantic assessment** of this candidate’s CV.
+You are a senior HR director and hiring expert. Perform a DEEP SEMANTIC ASSESSMENT of this candidate’s CV.
 
-GOAL:
-- Understand meaning and implications beyond keywords.
-- Compare the candidate against the JOB REQUIREMENTS with clear evidence and reasoning.
-- Write LONG, PRECISE, and HUMAN-like reasoning — not short bullet fragments.
-- Explicitly describe what they HAVE, what they LACK, and WHY it matters.
-- In the Recommendation section: write a **professional, paragraph-style hiring report** that argues for or against the candidate.
-- In Job Fit: explain each **matched** and **missing requirement** with **multi-line reasoning** and real insight.
+INSTRUCTIONS:
+- Go beyond keywords. Infer skills, leadership, adaptability, and problem-solving.
+- Compare the candidate against the JOB REQUIREMENTS in detail.
+- Write LONG, PRECISE, and HUMAN-style reasoning.
+- Explicitly explain what they HAVE, what they LACK, and WHY it matters.
+- In “Job Fit,” analyze matched and missing requirements with paragraph-level reasoning.
+- In “Recommendation,” write a professional, paragraph-style hiring analysis.
 
 JOB REQUIREMENTS:
 {self.job_requirements[:7000]}
@@ -197,8 +196,8 @@ OUTPUT FORMAT (STRICT JSON)
                         "role": "system",
                         "content": (
                             "You are an expert HR professional and analyst. "
-                            "Always produce long, reasoned, multi-paragraph analyses. "
-                            "Explain your logic clearly and completely."
+                            "Return long, deeply reasoned multi-paragraph analyses only. "
+                            "Always ensure JSON output is complete and valid."
                         ),
                     },
                     {"role": "user", "content": prompt},
@@ -247,8 +246,6 @@ OUTPUT FORMAT (STRICT JSON)
                 potential_concerns=[],
                 assessed_at=datetime.now().isoformat(),
             )
-
-    # ------------------- JSON CLEANUP -------------------
 
     def _clean_json(self, content: str) -> str:
         """Clean model output for safe JSON parsing"""
