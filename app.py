@@ -33,25 +33,36 @@ if req_file:
 # --- Expert Name Input ---
 st.markdown("### 🎯 Enter the Expert Role Title (exactly as in the tender file)")
 expert_name = st.text_input(
-    "Example: Key Expert 1 Road Traffic Expert - Team Leader",
-    placeholder="Enter the expert role title here..."
+    "Example: Team Leader, International Expert",
+    placeholder="Enter the expert role title or partial match (e.g., 'Key Expert 1', 'Procurement Expert')"
 )
 
-# Function to extract specific expert section from the tender
+# --- Smart Expert Section Extraction ---
 def extract_expert_section(full_text: str, expert_name: str) -> str:
+    """
+    Extract the section for the given expert title from the tender text.
+    Works for any tender structure.
+    Stops when it reaches another expert or a new major heading.
+    """
     if not full_text or not expert_name:
         return ""
-    # Find the section starting with the expert name
-    pattern = re.compile(
-        rf"({re.escape(expert_name)}.*?)(?=(?:\n[A-Z].*?Expert|Definitions|$))",
-        re.IGNORECASE | re.DOTALL
-)
 
-    match = pattern.search(full_text)
+    # Normalize text
+    text = re.sub(r"\s+", " ", full_text)
+
+    # Match start from the expert name to the next clear section marker
+    pattern = re.compile(
+        rf"({re.escape(expert_name)}.*?)(?=(?:Key\s*Expert|Non[- ]?Key\s*Expert|Expert\s+in|Project\s+Manager|Definitions|General\s+Conditions|Terms|Annex|$))",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    match = pattern.search(text)
     if match:
-        return match.group(1).strip()
-    else:
-        return ""
+        section = match.group(1).strip()
+        # Clean small formatting artifacts
+        section = re.sub(r"\s{2,}", "\n", section)
+        return section
+    return ""
 
 # --- Upload CVs ---
 cv_files = st.file_uploader(
@@ -60,12 +71,13 @@ cv_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-# --- Run Button ---
+# --- Run Assessment ---
 if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.strip() and (api_key or os.getenv("OPENAI_API_KEY")):
     with tempfile.TemporaryDirectory() as tmpdir:
         cv_folder = os.path.join(tmpdir, "cvs")
         os.makedirs(cv_folder, exist_ok=True)
 
+        # Save uploaded CVs
         for file in cv_files:
             path = os.path.join(cv_folder, file.name)
             with open(path, "wb") as f:
@@ -73,13 +85,14 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
 
         st.info("⏳ Processing CVs — please wait...")
 
+        # Initialize system
         system = CVAssessmentSystem(api_key=api_key or None)
 
-        # Extract specific expert section from tender
+        # Extract expert section dynamically
         expert_section = extract_expert_section(tender_text, expert_name)
 
         if not expert_section:
-            st.warning("⚠️ Could not find that expert in the tender. The full tender will be used as fallback context.")
+            st.warning("⚠️ Could not precisely locate that expert section. The full tender will be used as fallback context.")
             combined_text = tender_text
         else:
             combined_text = (
@@ -89,13 +102,17 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 f"{expert_section}"
             )
             st.success(f"✅ Extracted expert section for: {expert_name}")
-            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:2000], height=250)
+            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:2500], height=250)
 
-        # Set as job requirements
+        # Assign requirements text for evaluation
         system.job_requirements = combined_text
 
         # Process CVs
-        results = system.process_cv_folder(cv_folder, mode="critical" if mode == "Critical Narrative" else "structured")
+        results = system.process_cv_folder(
+            cv_folder,
+            mode="critical" if mode == "Critical Narrative" else "structured"
+        )
+
         st.success(f"✅ Processed {len(results)} candidate(s)")
 
         # ---------- STRUCTURED MODE ----------
@@ -126,7 +143,10 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                             st.markdown("✂️ Tailoring Suggestions" + tailoring)
                     else:
                         st.markdown(report)
+
                     st.markdown(f"**🧮 Final Score:** {r['final_score']:.2f} / 1.00")
+
 else:
     if not expert_name.strip():
-        st.warning("⚠️ Please enter the expert name before running the assessment.")
+        st.warning("⚠️ Please enter the expert role title before running the assessment.")
+
