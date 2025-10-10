@@ -40,29 +40,28 @@ expert_name = st.text_input(
 # --- Smart Expert Section Extraction ---
 def extract_expert_section(full_text: str, expert_name: str) -> str:
     """
-    Extract the section for the given expert title from the tender text.
-    Works for any tender structure.
-    Stops when it reaches another expert or a new major heading.
+    Extracts the full text for a specific expert, including both table and paragraph content.
+    Handles multiple formatting styles.
     """
     if not full_text or not expert_name:
         return ""
 
-    # Normalize text
-    text = re.sub(r"\s+", " ", full_text)
-
-    # Match start from the expert name to the next clear section marker
+    # More flexible: stops at the next "Key Expert", "Expert in", "Annex", or "Non-key"
     pattern = re.compile(
-        rf"({re.escape(expert_name)}.*?)(?=(?:Key\s*Expert|Non[- ]?Key\s*Expert|Expert\s+in|Project\s+Manager|Definitions|General\s+Conditions|Terms|Annex|$))",
+        rf"({re.escape(expert_name)}.*?)(?=(?:Key\s*Expert\s*\d|KE\s*\d|Expert\s+in|Non[-\s]*Key|Annex|General\s+Conditions|Terms|END|$))",
         re.IGNORECASE | re.DOTALL,
     )
 
-    match = pattern.search(text)
+    match = pattern.search(full_text)
     if match:
-        section = match.group(1).strip()
-        # Clean small formatting artifacts
-        section = re.sub(r"\s{2,}", "\n", section)
-        return section
+        section = match.group(1)
+        # Clean extra spacing and weird line breaks
+        section = re.sub(r"\n{2,}", "\n", section)
+        section = re.sub(r"\s{2,}", " ", section)
+        return section.strip()
+
     return ""
+
 
 # --- Upload CVs ---
 cv_files = st.file_uploader(
