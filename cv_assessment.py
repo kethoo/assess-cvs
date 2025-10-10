@@ -45,19 +45,28 @@ class CVAssessmentSystem:
     def extract_expert_profiles(self) -> Dict[str, str]:
         """
         Parse the loaded job requirements text and extract sections for each expert profile.
+        Works with EU-style tender bullet formatting.
         Returns a dictionary {expert_title: text_block}.
         """
         text = self.job_requirements
         profiles = {}
 
+        # Match patterns like:
+        # "• Key Expert 1 Road Traffic Expert - team Leader :" or
+        # "• Software development expert :" (with or without number)
         pattern = re.compile(
-            r"(Key|Non[- ]Key)\s*Expert\s*\d+\s*[-–]\s*[A-Za-z0-9 ,&()\/\-]+(?:(?:\n|.)*?)(?=(?:Key|Non[- ]Key)\s*Expert\s*\d+|$)",
-            re.IGNORECASE,
+            r"(?:•\s*)?"
+            r"(Key\s*Expert\s*\d*\s*[A-Za-z0-9 ,/&\-()]*?|"
+            r"Non[- ]?Key\s*Expert\s*\d*\s*[A-Za-z0-9 ,/&\-()]*?|"
+            r"[A-Z][A-Za-z\s/&\-()]+expert)"
+            r"\s*:.*?(?=(?:•\s*(?:Key|Non[- ]?Key)?\s*Expert|$))",
+            re.IGNORECASE | re.DOTALL,
         )
-        sections = pattern.finditer(text)
-        for m in sections:
-            title_line = m.group(0).split("\n")[0].strip()
-            block = m.group(0).strip()
+
+        matches = pattern.finditer(text)
+        for match in matches:
+            block = match.group(0).strip()
+            title_line = block.split(":")[0].strip("• ").strip()
             profiles[title_line] = block
 
         print(f"✅ Extracted {len(profiles)} expert profiles from tender.")
@@ -66,12 +75,19 @@ class CVAssessmentSystem:
     def get_expert_names(self) -> list:
         """Return a list of available expert titles for Streamlit dropdown."""
         profiles = self.extract_expert_profiles()
-        return list(profiles.keys())
+        return [t.title() for t in profiles.keys()]
 
     def get_expert_section(self, selected_expert: str) -> str:
         """Return the text of the selected expert's section with general context."""
         profiles = self.extract_expert_profiles()
-        section = profiles.get(selected_expert, "")
+        # Handle title normalization
+        found_key = None
+        for key in profiles.keys():
+            if selected_expert.lower() in key.lower():
+                found_key = key
+                break
+
+        section = profiles.get(found_key, "")
         context = self.job_requirements[:2000]  # first 2000 chars of general tender
         combined = f"{context}\n\n--- SPECIFIC ROLE FOCUS ---\n\n{section}"
         return combined
