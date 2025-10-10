@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any
@@ -35,7 +36,7 @@ class CVAssessmentSystem:
 
     # ------------------- PROCESSING CANDIDATE CVS -------------------
 
-    def process_cv_folder(self, folder_path: str, mode: str = "structured") -> List[CandidateAssessment]:
+    def process_cv_folder(self, folder_path: str, mode: str = "structured") -> List[Any]:
         """Process all CVs in a folder"""
         cv_files = []
         for ext in ["*.pdf", "*.PDF", "*.doc", "*.DOC", "*.docx", "*.DOCX"]:
@@ -95,11 +96,11 @@ class CVAssessmentSystem:
     # ------------------- STRUCTURED (JSON) ASSESSMENT -------------------
 
     def _assess_candidate_structured(self, filename: str, cv_text: str) -> CandidateAssessment:
-        """Structured scoring (dashboard mode)"""
+        """Structured scoring (dashboard mode) with robust JSON parsing"""
         prompt = f"""
-You are an HR evaluator performing a structured, detailed candidate assessment.
+You are an expert HR evaluator performing a structured, detailed candidate assessment.
 Compare the candidate’s CV to the job requirements, scoring Education, Experience, Skills, and Job Fit.
-Provide a long explanation for each score but output valid JSON exactly as specified.
+Return valid JSON ONLY (no markdown, commentary, or code fences). Be detailed and reasoned inside each field.
 
 JOB REQUIREMENTS:
 {self.job_requirements[:7000]}
@@ -107,18 +108,32 @@ JOB REQUIREMENTS:
 CANDIDATE CV:
 {cv_text[:9000]}
 """
+
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are an expert HR evaluator returning long, justified JSON output only."},
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an HR evaluation system. "
+                            "Return ONLY valid JSON. Do not include markdown, code fences, or commentary."
+                        ),
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
                 max_tokens=9000,
+                stop=["```", "\n\n\n"],
             )
-            content = self._clean_json(response.choices[0].message.content)
-            data = json.loads(content)
+
+            raw_output = response.choices[0].message.content.strip()
+            print("=== RAW MODEL OUTPUT (first 1000 chars) ===")
+            print(raw_output[:1000])
+
+            clean_json = self._clean_json(raw_output)
+            data = json.loads(clean_json)
+
             return CandidateAssessment(
                 candidate_name=data.get("candidate_name", filename),
                 filename=filename,
@@ -136,6 +151,27 @@ CANDIDATE CV:
                 potential_concerns=data.get("potential_concerns", []),
                 assessed_at=datetime.now().isoformat(),
             )
+
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON parsing failed for {filename}: {e}")
+            return CandidateAssessment(
+                candidate_name="Error",
+                filename=filename,
+                overall_score=0,
+                fit_level="Error",
+                education_details={},
+                experience_details={},
+                skills_details={},
+                job_fit_details={},
+                weighted_score_total=0,
+                executive_summary={"have": "", "lack": "", "risks_gaps": [], "recommendation": "Invalid JSON"},
+                recommendation={"verdict": "Error", "confidence": "low", "rationale": "Invalid JSON returned"},
+                interview_focus_areas=[],
+                red_flags=["Assessment failed"],
+                potential_concerns=[],
+                assessed_at=datetime.now().isoformat(),
+            )
+
         except Exception as e:
             print(f"❌ Assessment error: {e}")
             return CandidateAssessment(
@@ -166,7 +202,7 @@ Prepare a CRITICAL EVALUATION of this candidate written as if scoring a proposal
 
 STYLE:
 - Highly detailed and professional, in Markdown.
-- Use clear sections like:
+- Use sections like:
   🧭 Critical Evaluation – [Candidate Name]
   Criterion | Score (0–1) | Confidence | Evaluator Commentary
 - Include weighted summary tables and evaluator-style commentary paragraphs.
@@ -182,7 +218,13 @@ CANDIDATE CV:
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are a rigorous evaluator producing long, structured markdown reports with critical commentary and tables."},
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a rigorous evaluator producing long, structured markdown reports "
+                            "with critical commentary and tables."
+                        ),
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
@@ -195,9 +237,14 @@ CANDIDATE CV:
     # ------------------- JSON CLEANUP -------------------
 
     def _clean_json(self, content: str) -> str:
+        """Clean and extract JSON content robustly from model output."""
         content = content.strip()
-        if content.startswith("```json"):
-            content = content[7:-3]
-        elif content.startswith("```"):
-            content = content[3:-3]
-        return content.strip()
+        # Remove markdown code fences
+        content = re.sub(r"^```(json)?", "", content)
+        content = re.sub(r"```$", "", content)
+        content = content.strip()
+        # Extract JSON object
+        match = re.search(r"(\{.*\})", content, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return content
