@@ -19,10 +19,10 @@ class CVAssessmentSystem:
         self.assessments: List[Any] = []
         self.session_id = f"assessment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    # ------------------- LOAD JOB REQUIREMENTS -------------------
+    # ------------------- LOAD TENDER & JOB REQUIREMENTS -------------------
 
     def load_job_requirements(self, file_path: str) -> str:
-        """Load job requirements from Word or PDF file"""
+        """Load tender or job requirements from Word or PDF file"""
         file_extension = Path(file_path).suffix.lower()
         if file_extension == ".pdf":
             text = self._extract_text_from_pdf(file_path)
@@ -33,6 +33,42 @@ class CVAssessmentSystem:
         self.job_requirements = text
         print(f"✅ Loaded job requirements from: {file_path}")
         return text
+
+    # ------------------- EXPERT ROLE EXTRACTION -------------------
+
+    def extract_expert_profiles(self) -> Dict[str, str]:
+        """
+        Parse the loaded job requirements text and extract sections for each expert profile.
+        Returns a dictionary {expert_title: text_block}.
+        """
+        text = self.job_requirements
+        profiles = {}
+
+        pattern = re.compile(
+            r"(Key|Non[- ]Key)\s*Expert\s*\d+\s*[-–]\s*[A-Za-z0-9 ,&()\/\-]+(?:(?:\n|.)*?)(?=(?:Key|Non[- ]Key)\s*Expert\s*\d+|$)",
+            re.IGNORECASE
+        )
+        sections = pattern.finditer(text)
+        for m in sections:
+            title_line = m.group(0).split("\n")[0].strip()
+            block = m.group(0).strip()
+            profiles[title_line] = block
+
+        print(f"✅ Extracted {len(profiles)} expert profiles from tender.")
+        return profiles
+
+    def get_expert_names(self) -> list:
+        """Return a list of available expert titles for Streamlit dropdown."""
+        profiles = self.extract_expert_profiles()
+        return list(profiles.keys())
+
+    def get_expert_section(self, selected_expert: str) -> str:
+        """Return the text of the selected expert's section with general context."""
+        profiles = self.extract_expert_profiles()
+        section = profiles.get(selected_expert, "")
+        context = self.job_requirements[:2000]  # first 2000 chars of general tender
+        combined = f"{context}\n\n--- SPECIFIC ROLE FOCUS ---\n\n{section}"
+        return combined
 
     # ------------------- PROCESS CV FOLDER -------------------
 
@@ -101,90 +137,14 @@ class CVAssessmentSystem:
 You are an HR evaluator performing a structured, detailed assessment of a candidate.
 
 TASK:
-Compare the candidate’s CV to the job requirements.
-Assign numeric scores and provide detailed reasoning for:
+Compare the candidate’s CV to the job requirements below.
+Assign numeric scores (0–100) and provide detailed reasoning for:
 - Education
 - Experience
 - Skills
 - Job-specific Fit
 
-If a section is missing information, infer or estimate it reasonably — do NOT leave fields blank.
-
-OUTPUT:
-Return ONLY valid JSON following exactly this structure (fill every field with meaningful data):
-
-{{
-  "candidate_name": "string",
-  "summary": {{
-    "headline": "string",
-    "total_experience_years": int,
-    "key_domains": ["string"],
-    "overall_fit_score": int,
-    "fit_level": "Excellent/Good/Fair/Poor",
-    "summary_reasoning": "string"
-  }},
-  "scoring_breakdown": {{
-    "education": {{
-      "score": int,
-      "weight": 0.20,
-      "details": {{
-        "degrees": ["string"],
-        "relevance": "string",
-        "strengths": ["string"],
-        "gaps": ["string"],
-        "reasoning": "string"
-      }}
-    }},
-    "experience": {{
-      "score": int,
-      "weight": 0.40,
-      "details": {{
-        "total_years": int,
-        "roles": ["string"],
-        "key_projects": ["string"],
-        "transferable_skills": ["string"],
-        "gaps": ["string"],
-        "reasoning": "string"
-      }}
-    }},
-    "skills": {{
-      "score": int,
-      "weight": 0.25,
-      "details": {{
-        "skills_matched": ["string"],
-        "skills_missing": ["string"],
-        "certifications": ["string"],
-        "reasoning": "string"
-      }}
-    }},
-    "job_specific_fit": {{
-      "score": int,
-      "weight": 0.15,
-      "details": {{
-        "alignment_summary": "string",
-        "matched_requirements": ["string"],
-        "missing_requirements": ["string"],
-        "reasoning": "string"
-      }}
-    }}
-  }},
-  "weighted_score_total": int,
-  "executive_summary": {{
-    "have": "string",
-    "lack": "string",
-    "risks_gaps": ["string"],
-    "recommendation": "string"
-  }},
-  "recommendation": {{
-    "verdict": "Hire / Consider / Reject",
-    "confidence": "High / Moderate / Low",
-    "rationale": "string"
-  }},
-  "interview_focus_areas": ["string"],
-  "red_flags": ["string"],
-  "potential_concerns": ["string"],
-  "assessed_at": "ISO8601 timestamp"
-}}
+Return only valid JSON.
 
 JOB REQUIREMENTS:
 {self.job_requirements[:10000]}
@@ -198,23 +158,15 @@ CANDIDATE CV:
                 messages=[
                     {
                         "role": "system",
-                        "content": (
-                            "You are an HR evaluation system. "
-                            "Return ONLY valid, fully populated JSON. Never leave fields blank. "
-                            "If unsure, infer logically from context."
-                        ),
+                        "content": "You are an HR evaluation system. Return ONLY valid JSON.",
                     },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
                 max_tokens=9000,
-                stop=["```", "\n\n\n"],
             )
 
             raw_output = response.choices[0].message.content.strip()
-            print("=== RAW MODEL OUTPUT (first 1000 chars) ===")
-            print(raw_output[:1000])
-
             clean_json = self._clean_json(raw_output)
             data = json.loads(clean_json)
 
@@ -236,30 +188,8 @@ CANDIDATE CV:
                 assessed_at=datetime.now().isoformat(),
             )
 
-        except json.JSONDecodeError as e:
-            print(f"❌ JSON parsing failed for {filename}: {e}")
-            print("=== RAW OUTPUT ===")
-            print(raw_output)
-            return CandidateAssessment(
-                candidate_name="Error",
-                filename=filename,
-                overall_score=0,
-                fit_level="Error",
-                education_details={},
-                experience_details={},
-                skills_details={},
-                job_fit_details={},
-                weighted_score_total=0,
-                executive_summary={"have": "", "lack": "", "risks_gaps": [], "recommendation": "Invalid JSON"},
-                recommendation={"verdict": "Error", "confidence": "low", "rationale": "Invalid JSON returned"},
-                interview_focus_areas=[],
-                red_flags=["Assessment failed"],
-                potential_concerns=[],
-                assessed_at=datetime.now().isoformat(),
-            )
-
         except Exception as e:
-            print(f"❌ Assessment error: {e}")
+            print(f"❌ Error in structured assessment: {e}")
             return CandidateAssessment(
                 candidate_name="Error",
                 filename=filename,
@@ -270,10 +200,10 @@ CANDIDATE CV:
                 skills_details={},
                 job_fit_details={},
                 weighted_score_total=0,
-                executive_summary={"have": "", "lack": "", "risks_gaps": [], "recommendation": "Assessment failed"},
-                recommendation={"verdict": "Error", "confidence": "low", "rationale": str(e)},
+                executive_summary={"recommendation": "Assessment failed"},
+                recommendation={"verdict": "Error", "rationale": str(e)},
                 interview_focus_areas=[],
-                red_flags=["Assessment failed"],
+                red_flags=[],
                 potential_concerns=[],
                 assessed_at=datetime.now().isoformat(),
             )
@@ -281,33 +211,21 @@ CANDIDATE CV:
     # ------------------- CRITICAL + TAILORING MODE -------------------
 
     def _assess_candidate_critical(self, filename: str, cv_text: str) -> Dict[str, Any]:
-        """Generate a detailed evaluator-style narrative report, with CV tailoring suggestions."""
+        """Critical narrative evaluation with final score and tailoring suggestions."""
         prompt = f"""
-You are a senior evaluator AND a strategic CV coach working for an international development agency (World Bank / ADB / EU).
+You are a senior evaluator and CV improvement consultant.
 
-TASK:
-1️⃣ Perform a **Critical Evaluation** of this candidate's CV compared to the JOB REQUIREMENTS.  
-   - Use the structure of a professional evaluator report.
-   - Include numerical scores (0–1), confidence levels, and commentary.
-   - Focus on evidence-based criticism (be analytical and skeptical, not promotional).
+Perform a **Critical Evaluation** of this candidate's CV compared to the JOB REQUIREMENTS.
 
-2️⃣ Add a new section titled **"✂️ Tailoring Suggestions (How to Strengthen CV for This Role)"**:
-   - Analyze the job requirements and the candidate’s CV.
-   - Identify where the candidate’s actual experience could match the requirements if phrased differently or highlighted better.
-   - Suggest concrete rewrites or emphasis changes that make the CV more aligned.
-   - Never invent new experience.
-   - Include both the **original phrasing** and the **suggested improved version**.
-   - Recommend additional keywords, structure, or section adjustments to increase alignment.
-
-FORMAT:
-- Write the full output in Markdown.
-- Start with: "🧭 Critical Evaluation – [Candidate Name]"
-- Include sections:
-  • Evaluation Table (Criterion | Score | Confidence | Evaluator Commentary)
-  • 📊 Critical Summary
-  • 📉 Evaluator Summary
-  • 📌 Strengths & Weaknesses
-  • ✂️ Tailoring Suggestions (How to Strengthen CV for This Role)
+INSTRUCTIONS:
+- Include a detailed evaluation table with scores (0–1) and confidence levels.
+- After the table, compute and state a **Final Weighted Score** (e.g. 0.82 / 1.00).
+- Include:
+  📊 Critical Summary
+  📉 Evaluator Summary
+  📌 Strengths & Weaknesses
+  ✂️ Tailoring Suggestions (How to Strengthen CV for This Role)
+- Never invent experience.
 
 JOB REQUIREMENTS:
 {self.job_requirements[:7000]}
@@ -315,9 +233,10 @@ JOB REQUIREMENTS:
 CANDIDATE CV:
 {cv_text[:9000]}
 
-Be detailed, analytical, and professional. Avoid generic advice. Produce a long, realistic report.
+FORMAT:
+Markdown, structured, professional.
+Always include: **Final Score (weighted average): X.XX / 1.00**
 """
-
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o",
@@ -325,25 +244,31 @@ Be detailed, analytical, and professional. Avoid generic advice. Produce a long,
                     {
                         "role": "system",
                         "content": (
-                            "You are a critical evaluator and CV improvement consultant. "
-                            "Write long, detailed, structured markdown reports including tailoring suggestions. "
-                            "Never fabricate experience or skills."
+                            "You are a critical evaluator and CV tailoring consultant. "
+                            "Always include numeric scores, a final weighted score, and detailed suggestions."
                         ),
                     },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.15,
-                max_tokens=8000,
+                max_tokens=8500,
             )
+
+            report_text = response.choices[0].message.content.strip()
+            match = re.search(r"Final Score.*?([0-9]\.[0-9]+)", report_text)
+            final_score = float(match.group(1)) if match else 0.0
+
             return {
                 "candidate_name": filename,
-                "report": response.choices[0].message.content
+                "report": report_text,
+                "final_score": final_score,
             }
 
         except Exception as e:
             return {
                 "candidate_name": filename,
-                "report": f"❌ Error generating critical evaluation with tailoring: {e}"
+                "report": f"❌ Error generating critical evaluation: {e}",
+                "final_score": 0.0,
             }
 
     # ------------------- JSON CLEANER -------------------
