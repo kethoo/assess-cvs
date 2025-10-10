@@ -87,24 +87,40 @@ class CVAssessmentSystem:
         return "\n".join(text)
 
     def _extract_text_from_word(self, file_path: str) -> str:
-        """Extract text from Word document, including tables in correct order."""
+        """Extract text from Word document, preserving order of paragraphs and tables."""
+        from docx.document import Document as _Document
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+        from docx import Document
+    
+        def iter_block_items(parent):
+            """Yield paragraphs and tables in document order."""
+            if isinstance(parent, _Document):
+                parent_elm = parent.element.body
+            else:
+                parent_elm = parent._tc
+            for child in parent_elm.iterchildren():
+                if child.tag.endswith("tbl"):
+                    yield Table(child, parent)
+                elif child.tag.endswith("p"):
+                    yield Paragraph(child, parent)
+    
         doc = Document(file_path)
         text_chunks = []
     
-        # Walk through elements in order of appearance
-        for element in doc.element.body:
-            if element.tag.endswith("tbl"):  # table
-                for row in element.xpath(".//w:tr"):
-                    cells = [cell.text_content().strip() for cell in row.xpath(".//w:t") if cell.text_content().strip()]
-                    if cells:
-                        text_chunks.append(" ".join(cells))
-            elif element.tag.endswith("p"):  # paragraph
-                para_text = "".join(node.text for node in element.xpath(".//w:t") if node.text)
-                if para_text.strip():
-                    text_chunks.append(para_text.strip())
+        for block in iter_block_items(doc):
+            if isinstance(block, Paragraph):
+                text = block.text.strip()
+                if text:
+                    text_chunks.append(text)
+            elif isinstance(block, Table):
+                for row in block.rows:
+                    row_text = " ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                    if row_text:
+                        text_chunks.append(row_text)
     
-        # Combine all text
         return "\n".join(text_chunks)
+
 
 
     # ------------------- STRUCTURED (DASHBOARD) MODE -------------------
