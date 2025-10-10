@@ -7,40 +7,38 @@ st.set_page_config(page_title="Deep CV Assessment System", layout="wide")
 st.title("📄 Deep CV Assessment System")
 
 api_key = st.text_input("🔑 Enter OpenAI API Key", type="password")
-
 mode = st.radio("Select Evaluation Mode:", ["Structured (Dashboard)", "Critical Narrative"])
 
-req_file = st.file_uploader("📄 Upload Job Description", type=["pdf", "docx", "doc"])
-cv_files = st.file_uploader("👤 Upload Candidate CVs", type=["pdf", "docx", "doc"], accept_multiple_files=True)
+# --- Upload tender ---
+req_file = st.file_uploader("📄 Upload Tender / Job Description", type=["pdf", "docx", "doc"])
+selected_expert = None
+job_text = ""
 
-def render_section(title, section):
-    st.markdown(f"### {title}")
-    if not section:
-        st.info("No data available.")
-        return
-    score = section.get("score", "N/A")
-    weight = section.get("weight", "")
-    st.write(f"**Score:** {score}/100 | **Weight:** {weight}")
-    details = section.get("details", {})
-    if isinstance(details, dict):
-        for k, v in details.items():
-            if isinstance(v, list):
-                st.markdown(f"**{k.replace('_',' ').capitalize()}:**")
-                for i in v:
-                    st.markdown(f"- {i}")
-            elif v:
-                st.markdown(f"**{k.replace('_',' ').capitalize()}:** {v}")
-    st.divider()
+if req_file:
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(req_file.read())
+        tender_path = tmp.name
+
+    system_temp = CVAssessmentSystem(api_key=api_key or None)
+    system_temp.load_job_requirements(tender_path)
+
+    experts = system_temp.get_expert_names()
+    if experts:
+        selected_expert = st.selectbox("🎯 Select the specific Expert Role to evaluate for:", experts)
+        if selected_expert:
+            job_text = system_temp.get_expert_section(selected_expert)
+            st.success(f"✅ Selected: {selected_expert}")
+            st.text_area("📘 Preview of Selected Expert Requirements", job_text[:2000], height=250)
+    else:
+        st.warning("⚠️ No expert roles detected in this document.")
+
+# --- Upload CVs ---
+cv_files = st.file_uploader("👤 Upload Candidate CVs", type=["pdf", "docx", "doc"], accept_multiple_files=True)
 
 if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os.getenv("OPENAI_API_KEY")):
     with tempfile.TemporaryDirectory() as tmpdir:
-        req_path = os.path.join(tmpdir, req_file.name)
-        with open(req_path, "wb") as f:
-            f.write(req_file.read())
-
         cv_folder = os.path.join(tmpdir, "cvs")
         os.makedirs(cv_folder, exist_ok=True)
-
         for file in cv_files:
             path = os.path.join(cv_folder, file.name)
             with open(path, "wb") as f:
@@ -48,45 +46,44 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
 
         st.info("⏳ Processing CVs — please wait...")
         system = CVAssessmentSystem(api_key=api_key or None)
-        system.load_job_requirements(req_path)
 
-        if mode == "Critical Narrative":
-            results = system.process_cv_folder(cv_folder, mode="critical")
-            st.success(f"✅ Processed {len(results)} candidate(s)")
-
-            for r in results:
-                with st.expander(f"{r['candidate_name']} — Critical Evaluation"):
-                    st.markdown(r["report"])
+        # Use the selected expert section if chosen
+        if selected_expert and job_text:
+            system.job_requirements = job_text
         else:
-            results = system.process_cv_folder(cv_folder, mode="structured")
-            st.success(f"✅ Processed {len(results)} candidate(s)")
-            for r in results:
-                with st.expander(f"{r.candidate_name} — {r.overall_score}/100 ({r.fit_level})"):
-                    st.markdown("## 🧭 Executive Summary")
-                    summary = r.executive_summary or {}
-                    st.write(f"**Have:** {summary.get('have', '-')}")
-                    st.write(f"**Lack:** {summary.get('lack', '-')}")
-                    if summary.get("risks_gaps"):
-                        st.markdown("**Risks & Gaps:**")
-                        for g in summary["risks_gaps"]:
-                            st.markdown(f"- {g}")
-                    st.markdown(f"**Recommendation:** {summary.get('recommendation', '-')}")
-                    st.divider()
+            system.load_job_requirements(tender_path)
 
-                    st.markdown("## 🎓 Education")
-                    render_section("Education", r.education_details)
+        results = system.process_cv_folder(cv_folder, mode="critical" if mode == "Critical Narrative" else "structured")
 
-                    st.markdown("## 💼 Experience")
-                    render_section("Experience", r.experience_details)
+        st.success(f"✅ Processed {len(results)} candidate(s)")
 
-                    st.markdown("## 🧠 Skills")
-                    render_section("Skills", r.skills_details)
+        # ---------- Structured Mode ----------
+        if mode == "Structured (Dashboard)":
+            ranked = sorted(results, key=lambda x: x.overall_score, reverse=True)
+            st.markdown("## 🏆 Candidate Ranking (Based on Structured Scores)")
+            st.table([
+                {"Rank": i + 1, "Candidate": r.candidate_name, "Score": r.overall_score, "Fit Level": r.fit_level}
+                for i, r in enumerate(ranked)
+            ])
 
-                    st.markdown("## 🎯 Job Fit")
-                    render_section("Job Fit", r.job_fit_details)
+        # ---------- Critical Narrative Mode ----------
+        else:
+            ranked = sorted(results, key=lambda x: x.get("final_score", 0), reverse=True)
+            for r in ranked:
+                with st.expander(f"{r['candidate_name']} — Critical Evaluation"):
+                    report = r["report"]
+                    if "✂️ Tailoring Suggestions" in report:
+                        main, tailoring = report.split("✂️ Tailoring Suggestions", 1)
+                        st.markdown(main)
+                        with st.expander("✂️ Tailoring Suggestions (How to Strengthen CV for This Role)"):
+                            st.markdown("✂️ Tailoring Suggestions" + tailoring)
+                    else:
+                        st.markdown(report)
+                    st.markdown(f"**🧮 Final Score:** {r['final_score']:.2f} / 1.00")
 
-                    st.markdown("## 💬 Final Recommendation")
-                    rec = r.recommendation or {}
-                    st.write(f"**Verdict:** {rec.get('verdict', '-')}")
-                    st.write(f"**Confidence:** {rec.get('confidence', '-')}")
-                    st.write(f"**Rationale:** {rec.get('rationale', '-')}")
+            st.divider()
+            st.markdown("## 🏆 Candidate Ranking (Based on Final Scores)")
+            st.table([
+                {"Rank": i + 1, "Candidate": r["candidate_name"], "Final Score": f"{r['final_score']:.2f}"}
+                for i, r in enumerate(ranked)
+            ])
