@@ -87,53 +87,47 @@ class CVAssessmentSystem:
         return "\n".join(text)
 
     def _extract_text_from_word(self, file_path: str) -> str:
-        """Extract text from Word document, preserving order and merging fragmented lines."""
+        """Extract text from Word document, preserving tables and merging broken lines."""
         from docx import Document
-        from docx.document import Document as _Document
-        from docx.table import Table
-        from docx.text.paragraph import Paragraph
-    
-        def iter_block_items(parent):
-            """Yield paragraphs and tables in document order."""
-            if isinstance(parent, _Document):
-                parent_elm = parent.element.body
-            else:
-                parent_elm = parent._tc
-            for child in parent_elm.iterchildren():
-                if child.tag.endswith("tbl"):
-                    yield Table(child, parent)
-                elif child.tag.endswith("p"):
-                    yield Paragraph(child, parent)
-    
         doc = Document(file_path)
-        blocks = []
-        for block in iter_block_items(doc):
-            if isinstance(block, Paragraph):
-                text = block.text.strip()
-                if text:
-                    blocks.append(text)
-            elif isinstance(block, Table):
-                for row in block.rows:
-                    row_text = " ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
-                    if row_text:
-                        blocks.append(row_text)
+        lines = []
     
-        # Merge very short lines with the next block (fixes broken expert headings)
+        # --- Read all paragraphs ---
+        for p in doc.paragraphs:
+            text = p.text.strip()
+            if text:
+                lines.append(text)
+    
+        # --- Read all tables (flattened row by row) ---
+        for table in doc.tables:
+            for row in table.rows:
+                row_text = " ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                if row_text:
+                    lines.append(row_text)
+    
+        # --- Merge lines intelligently ---
         merged = []
-        skip_next = False
-        for i, b in enumerate(blocks):
-            if skip_next:
-                skip_next = False
-                continue
-            if len(b) < 50 and i + 1 < len(blocks):
-                merged.append(b + " " + blocks[i + 1])
-                skip_next = True
+        buffer = ""
+        for line in lines:
+            # join broken lines (no punctuation and short fragments)
+            if len(line) < 100 and not line.endswith((".", ":", ";")):
+                buffer += " " + line
             else:
-                merged.append(b)
+                buffer += " " + line
+                merged.append(buffer.strip())
+                buffer = ""
+        if buffer:
+            merged.append(buffer.strip())
     
-        return "\n".join(merged)
-
-
+        # --- Clean up double spaces and broken hyphens ---
+        text = "\n".join(merged)
+        text = re.sub(r"\s{2,}", " ", text)
+        text = re.sub(r"(\w)-\s+(\w)", r"\1\2", text)
+    
+        return text.strip()
+    
+    
+    
 
 
     # ------------------- STRUCTURED (DASHBOARD) MODE -------------------
