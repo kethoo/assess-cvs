@@ -87,14 +87,25 @@ class CVAssessmentSystem:
         return "\n".join(text)
 
     def _extract_text_from_word(self, file_path: str) -> str:
-        """Extract text from Word document"""
+        """Extract text from Word document, including tables in correct order."""
         doc = Document(file_path)
-        text = [p.text for p in doc.paragraphs]
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    text.append(cell.text)
-        return "\n".join(text)
+        text_chunks = []
+    
+        # Walk through elements in order of appearance
+        for element in doc.element.body:
+            if element.tag.endswith("tbl"):  # table
+                for row in element.xpath(".//w:tr"):
+                    cells = [cell.text_content().strip() for cell in row.xpath(".//w:t") if cell.text_content().strip()]
+                    if cells:
+                        text_chunks.append(" ".join(cells))
+            elif element.tag.endswith("p"):  # paragraph
+                para_text = "".join(node.text for node in element.xpath(".//w:t") if node.text)
+                if para_text.strip():
+                    text_chunks.append(para_text.strip())
+    
+        # Combine all text
+        return "\n".join(text_chunks)
+
 
     # ------------------- STRUCTURED (DASHBOARD) MODE -------------------
 
