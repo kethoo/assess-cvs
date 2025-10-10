@@ -23,14 +23,12 @@ class CVAssessmentSystem:
     def load_job_requirements(self, file_path: str) -> str:
         """Load job requirements from Word or PDF file"""
         file_extension = Path(file_path).suffix.lower()
-
         if file_extension == ".pdf":
             text = self._extract_text_from_pdf(file_path)
         elif file_extension in [".doc", ".docx"]:
             text = self._extract_text_from_word(file_path)
         else:
             raise ValueError(f"Unsupported file format: {file_extension}")
-
         self.job_requirements = text
         return text
 
@@ -86,19 +84,18 @@ class CVAssessmentSystem:
     # ------------------- CORE ASSESSMENT -------------------
 
     def _assess_candidate(self, filename: str, cv_text: str) -> CandidateAssessment:
-        """Deep, structured, and reasoned candidate assessment using OpenAI GPT"""
+        """Deep, reasoned candidate assessment using GPT"""
 
         prompt = f"""
-You are an expert HR analyst and career psychologist. Perform a DEEP SEMANTIC ASSESSMENT of this candidate's CV.
+You are a senior HR director and domain expert. Perform a DEEP SEMANTIC ASSESSMENT of the following candidate.
 
-🔍 OBJECTIVE:
-- Understand meaning beyond words. Infer competence, leadership, communication, and growth.
-- Evaluate candidate against the JOB REQUIREMENTS.
-- Produce detailed reasoning — NOT one-liners. Justify every point with evidence or inference.
-- Always be explicit: what they HAVE, what they LACK, and WHY it matters.
-- Assign numeric scores (0–100) and weights for each category.
-- Use long, human-like explanations that “reason with me” about fit and risk.
-- Output a large, structured JSON with multiple nested sections.
+GOAL:
+- Understand meaning and implications beyond keywords.
+- Compare the candidate against the JOB REQUIREMENTS with clear evidence.
+- Write LONG, PRECISE, and HUMAN reasoning — not bullet fragments.
+- Explicitly state what they HAVE and what they LACK, and WHY that matters.
+- Make the Recommendation section sound like a professional hiring report.
+- In Job Fit: explain each matched and missing requirement with multi-line reasoning.
 
 JOB REQUIREMENTS:
 {self.job_requirements[:7000]}
@@ -109,7 +106,6 @@ CANDIDATE CV:
 ==============================
 OUTPUT FORMAT (STRICT JSON)
 ==============================
-
 {{
   "candidate_name": "",
   "summary": {{
@@ -180,7 +176,6 @@ OUTPUT FORMAT (STRICT JSON)
   "interview_focus_areas": [],
   "red_flags": [],
   "potential_concerns": [],
-  "salary_recommendation": "",
   "assessed_at": ""
 }}
 """
@@ -191,9 +186,12 @@ OUTPUT FORMAT (STRICT JSON)
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an expert HR professional. Return LONG, DETAILED, REASONED JSON only — no summaries."
+                        "content": (
+                            "You are an expert HR professional and analyst. Always produce long, "
+                            "well-reasoned text that argues your conclusions like a senior recruiter."
+                        ),
                     },
-                    {"role": "user", "content": prompt}
+                    {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
                 max_tokens=9000,
@@ -217,7 +215,6 @@ OUTPUT FORMAT (STRICT JSON)
                 interview_focus_areas=data.get("interview_focus_areas", []),
                 red_flags=data.get("red_flags", []),
                 potential_concerns=data.get("potential_concerns", []),
-                salary_recommendation=data.get("salary_recommendation", ""),
                 assessed_at=datetime.now().isoformat(),
             )
 
@@ -238,7 +235,6 @@ OUTPUT FORMAT (STRICT JSON)
                 interview_focus_areas=[],
                 red_flags=["Assessment failed"],
                 potential_concerns=[],
-                salary_recommendation="TBD",
                 assessed_at=datetime.now().isoformat(),
             )
 
