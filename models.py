@@ -20,5 +20,5 @@ class CandidateAssessment:
     interview_focus_areas: List[str]
     red_flags: List[str]
     potential_concerns: List[str]
-    salary_recommendation: str
+
     assessed_at: str = datetime.now().isoformat()
