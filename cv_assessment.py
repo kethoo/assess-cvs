@@ -25,7 +25,6 @@ class CVAssessmentSystem:
         """Load tender or job requirements from Word or PDF file (auto-detects type)."""
         with open(file_path, "rb") as f:
             header = f.read(4)
-
         try:
             if header.startswith(b"%PDF"):
                 text = self._extract_text_from_pdf(file_path)
@@ -178,15 +177,15 @@ CANDIDATE CV:
     # ------------------- CRITICAL + TAILORING MODE -------------------
 
     def _assess_candidate_critical(self, filename: str, cv_text: str) -> Dict[str, Any]:
-        """Critical narrative evaluation with hybrid donor detection (semantic + regex fallback)."""
+        """Critical narrative evaluation with semantic donor detection, regex fallback, and dynamic donor context."""
 
-        # ---------- 1️⃣ Try semantic donor detection via GPT ----------
+        # ---------- 1️⃣ Semantic donor detection ----------
         donor_query = f"""
         Identify the main funding organization mentioned or implied in this tender.
         Return ONLY the donor name (e.g., 'World Bank', 'European Union', 'ADB', 'USAID', 'UNDP', 'AfDB', 'Unknown').
         If uncertain, answer exactly 'Unknown'.
         TENDER TEXT (excerpt):
-        {self.job_requirements[:2500]}
+        {self.job_requirements[:8000]}
         """
         donor_match = "Unknown"
         try:
@@ -200,7 +199,7 @@ CANDIDATE CV:
         except Exception as e:
             print(f"⚠️ Donor semantic detection failed, fallback triggered: {e}")
 
-        # ---------- 2️⃣ Cheap regex safety net ----------
+        # ---------- 2️⃣ Regex fallback ----------
         text_lower = self.job_requirements.lower()
         donors = {
             "World Bank": r"\b(world\s*bank|wbg|ifc|ida|ibrd)\b",
@@ -210,7 +209,6 @@ CANDIDATE CV:
             "African Development Bank": r"\b(african\s+development\s+bank|afdb)\b",
             "UNDP": r"\b(undp|united\s+nations\s+development\s+programme)\b",
         }
-
         if donor_match == "Unknown":
             for name, pattern in donors.items():
                 if re.search(pattern, text_lower):
@@ -219,20 +217,15 @@ CANDIDATE CV:
         if donor_match == "Unknown":
             donor_match = "General donor context"
 
-        # ---------- 3️⃣ Build the evaluation prompt ----------
+        # ---------- 3️⃣ Build the prompt ----------
         prompt = f"""
 You are a senior evaluator assessing candidates for a tender funded by **{donor_match}**.
 
 Perform a detailed, evidence-based critical evaluation of the candidate’s CV
 against the JOB REQUIREMENTS and contextualize every criterion according to {donor_match}'s
 typical focus and terminology.
-
-If {donor_match} = "World Bank", emphasize implementation, procurement, M&E, and reporting.
-If {donor_match} = "European Union", emphasize service contracts, key expert roles, and TA projects.
-If {donor_match} = "Asian Development Bank", emphasize capacity building and regional cooperation.
-If {donor_match} = "USAID", emphasize governance, performance monitoring, and stakeholder engagement.
-If {donor_match} = "UNDP", emphasize institutional strengthening and sustainability.
-If {donor_match} = "African Development Bank", emphasize public sector reform and infrastructure management.
+Do not mention other donors (EU, ADB, etc.) unless explicitly stated in the tender or CV.
+Focus exclusively on {donor_match} as the donor context.
 
 ---
 
@@ -266,7 +259,7 @@ After the table, show:
 Summarize alignment with {donor_match} project style and focus.
 
 **📉 Evaluator Summary**
-List 3–5 short key takeaways (strengths, gaps, donor-fit).
+List 3–5 key takeaways (strengths, weaknesses, donor-fit).
 
 **📌 Strengths & Weaknesses**
 Provide at least 3 evidence-based strengths and 3 weaknesses.
@@ -274,10 +267,10 @@ Provide at least 3 evidence-based strengths and 3 weaknesses.
 **✂️ Tailoring Suggestions (How to Strengthen CV for This Role)**
 
 **a. Rewriting & Emphasis Suggestions**
-Suggest specific text-level improvements or section reorderings to match {donor_match}’s terminology.
+Suggest concrete text-level improvements to highlight donor-specific relevance.
 
 **b. 🪶 Word Recommendations (Tender Keyword Alignment)**
-Provide 5–10 recommended keyword alignments based on {donor_match}’s phrasing.
+Provide 5–10 recommended keyword alignments using {donor_match} phrasing.
 
 | Current CV Wording | Recommended {donor_match} Keyword | Why |
 |--------------------|----------------------------------|-----|
@@ -296,7 +289,7 @@ Provide 5–10 recommended keyword alignments based on {donor_match}’s phrasin
 {cv_text[:9000]}
 """
 
-        # ---------- 4️⃣ Call the model for evaluation ----------
+        # ---------- 4️⃣ Call GPT ----------
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o",
