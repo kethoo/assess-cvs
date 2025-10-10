@@ -2,7 +2,7 @@ import os
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import List
+from typing import List, Dict, Any
 from docx import Document
 import PyPDF2
 import openai
@@ -24,20 +24,15 @@ class CVAssessmentSystem:
         """Load job requirements from Word or PDF file"""
         file_extension = Path(file_path).suffix.lower()
 
-        try:
-            if file_extension == ".pdf":
-                text = self._extract_text_from_pdf(file_path)
-            elif file_extension in [".doc", ".docx"]:
-                text = self._extract_text_from_word(file_path)
-            else:
-                raise ValueError(f"Unsupported file format: {file_extension}")
+        if file_extension == ".pdf":
+            text = self._extract_text_from_pdf(file_path)
+        elif file_extension in [".doc", ".docx"]:
+            text = self._extract_text_from_word(file_path)
+        else:
+            raise ValueError(f"Unsupported file format: {file_extension}")
 
-            self.job_requirements = text
-            return text
-
-        except Exception as e:
-            print(f"Error loading job requirements: {e}")
-            raise
+        self.job_requirements = text
+        return text
 
     # ------------------- PROCESSING CANDIDATE CVS -------------------
 
@@ -46,10 +41,6 @@ class CVAssessmentSystem:
         cv_files = []
         for ext in ["*.pdf", "*.doc", "*.docx"]:
             cv_files.extend(Path(folder_path).glob(ext))
-
-        if not cv_files:
-            print("No CV files found!")
-            return []
 
         for cv_file in cv_files:
             try:
@@ -69,103 +60,130 @@ class CVAssessmentSystem:
         """Extract text from CV file"""
         if file_path.suffix.lower() == ".pdf":
             return self._extract_text_from_pdf(str(file_path))
-        else:
-            return self._extract_text_from_word(str(file_path))
+        return self._extract_text_from_word(str(file_path))
 
     def _extract_text_from_pdf(self, file_path: str) -> str:
         """Extract text from PDF file"""
-        try:
-            with open(file_path, "rb") as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                text = []
-                for page in pdf_reader.pages:
-                    page_text = page.extract_text()
-                    if page_text:
-                        text.append(page_text)
-                return "\n".join(text)
-        except Exception as e:
-            raise Exception(f"Failed to read PDF: {e}")
+        text = []
+        with open(file_path, "rb") as file:
+            reader = PyPDF2.PdfReader(file)
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text.append(page_text)
+        return "\n".join(text)
 
     def _extract_text_from_word(self, file_path: str) -> str:
         """Extract text from Word document"""
-        try:
-            doc = Document(file_path)
-            text = []
-
-            for paragraph in doc.paragraphs:
-                text.append(paragraph.text)
-
-            # Also extract text from tables
-            for table in doc.tables:
-                for row in table.rows:
-                    for cell in row.cells:
-                        text.append(cell.text)
-
-            return "\n".join(text)
-
-        except Exception as e:
-            raise Exception(f"Failed to read Word document: {e}")
+        doc = Document(file_path)
+        text = [p.text for p in doc.paragraphs]
+        for table in doc.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    text.append(cell.text)
+        return "\n".join(text)
 
     # ------------------- CORE ASSESSMENT -------------------
 
     def _assess_candidate(self, filename: str, cv_text: str) -> CandidateAssessment:
-        """Ultra-detailed, context-aware candidate assessment using OpenAI"""
+        """Deep, structured, and reasoned candidate assessment using OpenAI GPT"""
 
         prompt = f"""
-You are an expert HR professional conducting an ULTRA-DETAILED, CONTEXT-AWARE candidate assessment.
+You are an expert HR analyst and career psychologist. Perform a DEEP SEMANTIC ASSESSMENT of this candidate's CV.
 
-CRITICAL INSTRUCTIONS:
-- Always balance positives and negatives.
-- For every requirement, explicitly state what the candidate HAS and what they DO NOT HAVE.
-- Cite CV evidence with dates, numbers, projects, company names.
-- Justify scores with detailed reasoning.
-- All numeric scores must be integers between 0 and 100.
+🔍 OBJECTIVE:
+- Understand meaning beyond words. Infer competence, leadership, communication, and growth.
+- Evaluate candidate against the JOB REQUIREMENTS.
+- Produce detailed reasoning — NOT one-liners. Justify every point with evidence or inference.
+- Always be explicit: what they HAVE, what they LACK, and WHY it matters.
+- Assign numeric scores (0–100) and weights for each category.
+- Use long, human-like explanations that “reason with me” about fit and risk.
+- Output a large, structured JSON with multiple nested sections.
 
 JOB REQUIREMENTS:
-{self.job_requirements[:4000]}
+{self.job_requirements[:7000]}
 
 CANDIDATE CV:
-{cv_text[:5000]}
+{cv_text[:9000]}
 
-===================================================================
-OUTPUT FORMAT
-===================================================================
-Return ONLY valid JSON with ALL of these keys:
-- candidate_name
-- overall_score (int 0–100)
-- fit_level
-- experience_score (int 0–100)
-- experience_explanation
-- skills_score (int 0–100)
-- skills_explanation
-- education_score (int 0–100)
-- education_explanation
-- cultural_fit_score (int 0–100)
-- cultural_fit_explanation
-- requirements_met
-- critical_gaps
-- key_strengths
-- key_weaknesses
-- missing_requirements
-- score_breakdown
-- why_this_score
-- recommendation
-- recommendation_reasoning
-- confidence_level
-- interview_focus_areas
-- red_flags
-- potential_concerns
-- executive_summary
-- salary_recommendation
+==============================
+OUTPUT FORMAT (STRICT JSON)
+==============================
+
+{{
+  "candidate_name": "",
+  "summary": {{
+    "headline": "",
+    "total_experience_years": 0,
+    "key_domains": [],
+    "overall_fit_score": 0,
+    "fit_level": "",
+    "summary_reasoning": ""
+  }},
+  "scoring_breakdown": {{
+    "education": {{
+      "score": 0,
+      "weight": 0.20,
+      "details": {{
+        "degrees": [],
+        "relevance": "",
+        "strengths": [],
+        "gaps": [],
+        "reasoning": ""
+      }}
+    }},
+    "experience": {{
+      "score": 0,
+      "weight": 0.40,
+      "details": {{
+        "total_years": 0,
+        "roles": [],
+        "key_projects": [],
+        "transferable_skills": [],
+        "gaps": [],
+        "reasoning": ""
+      }}
+    }},
+    "skills": {{
+      "score": 0,
+      "weight": 0.25,
+      "details": {{
+        "skills_matched": [],
+        "skills_missing": [],
+        "certifications": [],
+        "reasoning": ""
+      }}
+    }},
+    "job_specific_fit": {{
+      "score": 0,
+      "weight": 0.15,
+      "details": {{
+        "alignment_summary": "",
+        "matched_requirements": [],
+        "missing_requirements": [],
+        "reasoning": ""
+      }}
+    }}
+  }},
+  "weighted_score_total": 0,
+  "executive_summary": {{
+    "have": "",
+    "lack": "",
+    "risks_gaps": [],
+    "recommendation": ""
+  }},
+  "recommendation": {{
+    "verdict": "",
+    "confidence": "",
+    "rationale": ""
+  }},
+  "interview_focus_areas": [],
+  "red_flags": [],
+  "potential_concerns": [],
+  "salary_recommendation": "",
+  "assessed_at": ""
+}}
 """
-
-        def safe_int(d, key, default=0):
-            """Ensure numeric values are returned as ints between 0–100"""
-            try:
-                val = int(d.get(key, default))
-                return max(0, min(val, 100))
-            except:
-                return default
 
         try:
             response = self.client.chat.completions.create(
@@ -173,45 +191,33 @@ Return ONLY valid JSON with ALL of these keys:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an expert HR professional. Always return ultra-detailed JSON. Include both what the candidate HAS and what they DO NOT HAVE. Ensure all numeric scores are integers 0–100."
+                        "content": "You are an expert HR professional. Return LONG, DETAILED, REASONED JSON only — no summaries."
                     },
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.1,
-                max_tokens=4500,
+                max_tokens=9000,
             )
 
             content = self._clean_json(response.choices[0].message.content)
-            assessment_data = json.loads(content)
+            data = json.loads(content)
 
             return CandidateAssessment(
-                candidate_name=assessment_data.get("candidate_name", "Unknown"),
+                candidate_name=data.get("candidate_name", filename),
                 filename=filename,
-                overall_score=safe_int(assessment_data, "overall_score", 0),
-                fit_level=assessment_data.get("fit_level", "Unknown"),
-                experience_score=safe_int(assessment_data, "experience_score", 0),
-                experience_explanation=assessment_data.get("experience_explanation", ""),
-                skills_score=safe_int(assessment_data, "skills_score", 0),
-                skills_explanation=assessment_data.get("skills_explanation", ""),
-                education_score=safe_int(assessment_data, "education_score", 0),
-                education_explanation=assessment_data.get("education_explanation", ""),
-                cultural_fit_score=safe_int(assessment_data, "cultural_fit_score", 0),
-                cultural_fit_explanation=assessment_data.get("cultural_fit_explanation", ""),
-                requirements_met=assessment_data.get("requirements_met", []),
-                critical_gaps=assessment_data.get("critical_gaps", []),
-                key_strengths=assessment_data.get("key_strengths", []),
-                key_weaknesses=assessment_data.get("key_weaknesses", []),
-                missing_requirements=assessment_data.get("missing_requirements", []),
-                score_breakdown=assessment_data.get("score_breakdown", ""),
-                why_this_score=assessment_data.get("why_this_score", ""),
-                recommendation=assessment_data.get("recommendation", "consider"),
-                recommendation_reasoning=assessment_data.get("recommendation_reasoning", ""),
-                confidence_level=assessment_data.get("confidence_level", "low"),
-                interview_focus_areas=assessment_data.get("interview_focus_areas", []),
-                red_flags=assessment_data.get("red_flags", []),
-                potential_concerns=assessment_data.get("potential_concerns", []),
-                executive_summary=assessment_data.get("executive_summary", ""),
-                salary_recommendation=assessment_data.get("salary_recommendation", "TBD"),
+                overall_score=data.get("summary", {}).get("overall_fit_score", 0),
+                fit_level=data.get("summary", {}).get("fit_level", "Unknown"),
+                education_details=data.get("scoring_breakdown", {}).get("education", {}),
+                experience_details=data.get("scoring_breakdown", {}).get("experience", {}),
+                skills_details=data.get("scoring_breakdown", {}).get("skills", {}),
+                job_fit_details=data.get("scoring_breakdown", {}).get("job_specific_fit", {}),
+                weighted_score_total=data.get("weighted_score_total", 0),
+                executive_summary=data.get("executive_summary", {}),
+                recommendation=data.get("recommendation", {}),
+                interview_focus_areas=data.get("interview_focus_areas", []),
+                red_flags=data.get("red_flags", []),
+                potential_concerns=data.get("potential_concerns", []),
+                salary_recommendation=data.get("salary_recommendation", ""),
                 assessed_at=datetime.now().isoformat(),
             )
 
@@ -221,37 +227,24 @@ Return ONLY valid JSON with ALL of these keys:
                 candidate_name="Error",
                 filename=filename,
                 overall_score=0,
-                fit_level="Unknown",
-                experience_score=0,
-                experience_explanation="Error",
-                skills_score=0,
-                skills_explanation="Error",
-                education_score=0,
-                education_explanation="Error",
-                cultural_fit_score=0,
-                cultural_fit_explanation="Error",
-                requirements_met=[],
-                critical_gaps=["Assessment failed"],
-                key_strengths=[],
-                key_weaknesses=[],
-                missing_requirements=[],
-                score_breakdown="Error",
-                why_this_score="Error",
-                recommendation="consider",
-                recommendation_reasoning="Error",
-                confidence_level="low",
+                fit_level="Error",
+                education_details={},
+                experience_details={},
+                skills_details={},
+                job_fit_details={},
+                weighted_score_total=0,
+                executive_summary={"have": "", "lack": "", "risks_gaps": [], "recommendation": "Assessment failed"},
+                recommendation={"verdict": "Error", "confidence": "low", "rationale": str(e)},
                 interview_focus_areas=[],
-                red_flags=[],
+                red_flags=["Assessment failed"],
                 potential_concerns=[],
-                executive_summary="Error",
                 salary_recommendation="TBD",
                 assessed_at=datetime.now().isoformat(),
             )
 
-    # ------------------- UTILS -------------------
-
     def _clean_json(self, content: str) -> str:
-        """Clean JSON response from OpenAI"""
+        """Clean model output for safe JSON parsing"""
+        content = content.strip()
         if content.startswith("```json"):
             content = content[7:-3]
         elif content.startswith("```"):
