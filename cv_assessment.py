@@ -19,7 +19,7 @@ class CVAssessmentSystem:
         self.assessments: List[Any] = []
         self.session_id = f"assessment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    # ------------------- LOAD TENDER & JOB REQUIREMENTS -------------------
+    # ------------------- LOAD JOB REQUIREMENTS -------------------
 
     def load_job_requirements(self, file_path: str) -> str:
         """Load tender or job requirements from Word or PDF file (auto-detects type)."""
@@ -39,58 +39,6 @@ class CVAssessmentSystem:
         self.job_requirements = text
         print(f"✅ Loaded job requirements from: {file_path}")
         return text
-
-    # ------------------- EXPERT ROLE EXTRACTION -------------------
-
-    def extract_expert_profiles(self) -> Dict[str, str]:
-        """
-        Parse the loaded job requirements text and extract sections for each expert profile.
-        Works with EU-style tender bullet formatting.
-        Returns a dictionary {expert_title: text_block}.
-        """
-        text = self.job_requirements
-        profiles = {}
-
-        # Match patterns like:
-        # "• Key Expert 1 Road Traffic Expert - team Leader :" or
-        # "• Software development expert :" (with or without number)
-        pattern = re.compile(
-            r"(?:•\s*)?"
-            r"(Key\s*Expert\s*\d*\s*[A-Za-z0-9 ,/&\-()]*?|"
-            r"Non[- ]?Key\s*Expert\s*\d*\s*[A-Za-z0-9 ,/&\-()]*?|"
-            r"[A-Z][A-Za-z\s/&\-()]+expert)"
-            r"\s*:.*?(?=(?:•\s*(?:Key|Non[- ]?Key)?\s*Expert|$))",
-            re.IGNORECASE | re.DOTALL,
-        )
-
-        matches = pattern.finditer(text)
-        for match in matches:
-            block = match.group(0).strip()
-            title_line = block.split(":")[0].strip("• ").strip()
-            profiles[title_line] = block
-
-        print(f"✅ Extracted {len(profiles)} expert profiles from tender.")
-        return profiles
-
-    def get_expert_names(self) -> list:
-        """Return a list of available expert titles for Streamlit dropdown."""
-        profiles = self.extract_expert_profiles()
-        return [t.title() for t in profiles.keys()]
-
-    def get_expert_section(self, selected_expert: str) -> str:
-        """Return the text of the selected expert's section with general context."""
-        profiles = self.extract_expert_profiles()
-        # Handle title normalization
-        found_key = None
-        for key in profiles.keys():
-            if selected_expert.lower() in key.lower():
-                found_key = key
-                break
-
-        section = profiles.get(found_key, "")
-        context = self.job_requirements[:2000]  # first 2000 chars of general tender
-        combined = f"{context}\n\n--- SPECIFIC ROLE FOCUS ---\n\n{section}"
-        return combined
 
     # ------------------- PROCESS CV FOLDER -------------------
 
@@ -232,32 +180,86 @@ CANDIDATE CV:
     # ------------------- CRITICAL + TAILORING MODE -------------------
 
     def _assess_candidate_critical(self, filename: str, cv_text: str) -> Dict[str, Any]:
-        """Critical narrative evaluation with final score and tailoring suggestions."""
+        """Critical narrative evaluation with evaluation table, reasoning, and keyword recommendations."""
         prompt = f"""
-You are a senior evaluator and CV improvement consultant.
+You are a senior evaluator and HR specialist for EU/World Bank tenders.
 
-Perform a **Critical Evaluation** of this candidate's CV compared to the JOB REQUIREMENTS.
+TASK:
+Perform a **Critical Evaluation** of the following candidate’s CV compared to the JOB REQUIREMENTS.
 
-INSTRUCTIONS:
-- Include a detailed evaluation table with scores (0–1) and confidence levels.
-- After the table, compute and state a **Final Weighted Score** (e.g. 0.82 / 1.00).
-- Include:
-  📊 Critical Summary
-  📉 Evaluator Summary
-  📌 Strengths & Weaknesses
-  ✂️ Tailoring Suggestions (How to Strengthen CV for This Role)
-- Never invent experience.
+---
 
-JOB REQUIREMENTS:
-{self.job_requirements[:7000]}
+### REQUIRED OUTPUT STRUCTURE (Markdown)
 
-CANDIDATE CV:
+#### 🧭 Critical Evaluation – {filename}
+
+**Evaluation Table**
+
+| Section | Criteria | Score (0–1) | Confidence | Evaluator Commentary |
+|----------|-----------|-------------|-------------|----------------------|
+| **General Tender Context (20% weight)** | Understanding of project/tender context |  |  |  |
+|  | Familiarity with region/country context |  |  |  |
+| **Specific Expert Requirements (80% weight)** | Team leadership and management |  |  |  |
+|  | Relevant domain expertise |  |  |  |
+|  | Technical or regulatory knowledge |  |  |  |
+|  | Donor project experience (EU/WB/ADB, etc.) |  |  |  |
+|  | Communication and coordination skills |  |  |  |
+|  | Educational background |  |  |  |
+|  | Analytical and reporting skills |  |  |  |
+|  | Language proficiency |  |  |  |
+
+Fill **all cells** with numeric scores (0–1), confidence (High/Medium/Low), and concise evaluator commentary (1–3 sentences each).
+
+After the table, add:
+**Final Weighted Score (consider 80% expert requirements, 20% tender context): X.XX / 1.00**
+
+---
+
+**📊 Critical Summary**
+Summarize overall alignment with project and expert role (2–3 paragraphs). Be analytical and cite evidence.
+
+**📉 Evaluator Summary**
+Summarize 3–5 key takeaways, e.g.:
+- Strong alignment with donor project management
+- Missing direct regulatory enforcement experience
+- Excellent educational background, etc.
+
+**📌 Strengths & Weaknesses**
+List at least 3 strengths and 3 weaknesses with evidence.
+
+**✂️ Tailoring Suggestions (How to Strengthen CV for This Role)**
+
+**a. Rewriting & Emphasis Suggestions**
+List concrete, text-level suggestions (e.g., “Emphasize experience with EU-funded TA projects in executive summary.”)
+
+**b. 🪶 Word Recommendations (Tender Keyword Alignment)**
+List 5–10 **keyword alignment suggestions**.
+Provide a markdown table like:
+
+| Current CV Wording | Recommended Tender Keyword | Why |
+|--------------------|-----------------------------|-----|
+| "Managed donor projects" | "Led EU-funded Technical Assistance projects" | Aligns with EU terminology. |
+| "Worked with local stakeholders" | "Coordinated institutional counterparts and regulatory agencies" | Matches ToR phrasing. |
+
+---
+
+### CONTEXT INPUTS
+
+**General Tender Context (20%)**
+{self.job_requirements[:4000]}
+
+**CANDIDATE CV**
 {cv_text[:9000]}
 
-FORMAT:
-Markdown, structured, professional.
-Always include: **Final Score (weighted average): X.XX / 1.00**
+---
+
+INSTRUCTIONS:
+- Be detailed, structured, and realistic.
+- Always include numeric scores, reasoning, and commentary.
+- Never skip sections or placeholders.
+- Use professional EU evaluator tone throughout.
 """
+
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o",
@@ -265,8 +267,9 @@ Always include: **Final Score (weighted average): X.XX / 1.00**
                     {
                         "role": "system",
                         "content": (
-                            "You are a critical evaluator and CV tailoring consultant. "
-                            "Always include numeric scores, a final weighted score, and detailed suggestions."
+                            "You are a senior HR evaluator for donor-funded tenders. "
+                            "Always produce detailed, structured markdown reports with reasoning. "
+                            "Include numeric scores, commentary, and keyword recommendations."
                         ),
                     },
                     {"role": "user", "content": prompt},
@@ -276,7 +279,7 @@ Always include: **Final Score (weighted average): X.XX / 1.00**
             )
 
             report_text = response.choices[0].message.content.strip()
-            match = re.search(r"Final Score.*?([0-9]\.[0-9]+)", report_text)
+            match = re.search(r"Final Weighted Score.*?([0-9]\.[0-9]+)", report_text)
             final_score = float(match.group(1)) if match else 0.0
 
             return {
