@@ -30,6 +30,7 @@ class CVAssessmentSystem:
         else:
             raise ValueError(f"Unsupported file format: {file_extension}")
         self.job_requirements = text
+        print(f"✅ Loaded job requirements from: {file_path}")
         return text
 
     # ------------------- PROCESSING CANDIDATE CVS -------------------
@@ -37,19 +38,27 @@ class CVAssessmentSystem:
     def process_cv_folder(self, folder_path: str, mode: str = "detailed") -> List[CandidateAssessment]:
         """Process all CVs in a folder"""
         cv_files = []
-        for ext in ["*.pdf", "*.doc", "*.docx"]:
+        # Handle both lower- and upper-case extensions
+        for ext in ["*.pdf", "*.PDF", "*.doc", "*.DOC", "*.docx", "*.DOCX"]:
             cv_files.extend(Path(folder_path).glob(ext))
+
+        print(f"🔍 Found {len(cv_files)} CV files in {folder_path}")
+        if not cv_files:
+            print("⚠️ No CV files found! Check that your uploads are saved correctly.")
+            return []
 
         for cv_file in cv_files:
             try:
+                print(f"🧾 Processing: {cv_file.name}")
                 cv_text = self._extract_cv_text(cv_file)
                 assessment = self._assess_candidate(cv_file.name, cv_text)
                 self.assessments.append(assessment)
             except Exception as e:
-                print(f"Error processing {cv_file.name}: {e}")
+                print(f"❌ Error processing {cv_file.name}: {e}")
                 continue
 
         self.assessments.sort(key=lambda x: x.overall_score, reverse=True)
+        print(f"✅ Completed assessments for {len(self.assessments)} candidates.")
         return self.assessments
 
     # ------------------- FILE HELPERS -------------------
@@ -87,15 +96,15 @@ class CVAssessmentSystem:
         """Deep, reasoned candidate assessment using GPT"""
 
         prompt = f"""
-You are a senior HR director and domain expert. Perform a DEEP SEMANTIC ASSESSMENT of the following candidate.
+You are a **senior HR director** and **domain expert**. Perform a **deep semantic assessment** of this candidate’s CV.
 
 GOAL:
 - Understand meaning and implications beyond keywords.
-- Compare the candidate against the JOB REQUIREMENTS with clear evidence.
-- Write LONG, PRECISE, and HUMAN reasoning — not bullet fragments.
-- Explicitly state what they HAVE and what they LACK, and WHY that matters.
-- Make the Recommendation section sound like a professional hiring report.
-- In Job Fit: explain each matched and missing requirement with multi-line reasoning.
+- Compare the candidate against the JOB REQUIREMENTS with clear evidence and reasoning.
+- Write LONG, PRECISE, and HUMAN-like reasoning — not short bullet fragments.
+- Explicitly describe what they HAVE, what they LACK, and WHY it matters.
+- In the Recommendation section: write a **professional, paragraph-style hiring report** that argues for or against the candidate.
+- In Job Fit: explain each **matched** and **missing requirement** with **multi-line reasoning** and real insight.
 
 JOB REQUIREMENTS:
 {self.job_requirements[:7000]}
@@ -187,8 +196,9 @@ OUTPUT FORMAT (STRICT JSON)
                     {
                         "role": "system",
                         "content": (
-                            "You are an expert HR professional and analyst. Always produce long, "
-                            "well-reasoned text that argues your conclusions like a senior recruiter."
+                            "You are an expert HR professional and analyst. "
+                            "Always produce long, reasoned, multi-paragraph analyses. "
+                            "Explain your logic clearly and completely."
                         ),
                     },
                     {"role": "user", "content": prompt},
@@ -219,7 +229,7 @@ OUTPUT FORMAT (STRICT JSON)
             )
 
         except Exception as e:
-            print(f"Assessment error: {e}")
+            print(f"❌ Assessment error for {filename}: {e}")
             return CandidateAssessment(
                 candidate_name="Error",
                 filename=filename,
@@ -237,6 +247,8 @@ OUTPUT FORMAT (STRICT JSON)
                 potential_concerns=[],
                 assessed_at=datetime.now().isoformat(),
             )
+
+    # ------------------- JSON CLEANUP -------------------
 
     def _clean_json(self, content: str) -> str:
         """Clean model output for safe JSON parsing"""
