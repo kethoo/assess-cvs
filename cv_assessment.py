@@ -18,8 +18,8 @@ class CVAssessmentSystem:
     # ======================================================
     def extract_expert_sections_by_bold(self, docx_path, target_expert_name):
         """
-        Extract all occurrences of a given expert section (e.g. 'Key Expert 2' or 'KE2')
-        and separate each block with ---------------.
+        Extracts all occurrences of a given expert section (e.g. 'Key Expert 2' or 'KE2')
+        and separates each block with ---------------.
         Case-insensitive, tolerant of spacing or abbreviation (Key Expert 1 == KE1).
         """
         try:
@@ -98,11 +98,12 @@ class CVAssessmentSystem:
                 return f.read()
 
     # ======================================================
-    # 🧮 ORIGINAL STRUCTURED ASSESSMENT (80/20)
+    # 🧮 STRUCTURED ASSESSMENT (80/20 WEIGHTING)
     # ======================================================
     def structured_assessment(self, cv_text, expert_section):
         """
-        Returns markdown table-based evaluation (80/20 weighting) exactly like before.
+        Performs structured evaluation using the 80/20 weighting logic.
+        Always returns a markdown table.
         """
         prompt = f"""
 You are an EU tender evaluator. Compare the CV to the Expert Requirements.
@@ -113,34 +114,38 @@ You are an EU tender evaluator. Compare the CV to the Expert Requirements.
 ### CANDIDATE CV
 {cv_text}
 
-Evaluate strictly in this format:
+Write the response **exactly** in this order and in markdown syntax:
 
 ## Evaluation of Candidate CV Against Expert Requirements
 
 ### Evaluation Summary Table
 | Category | Description | Weight | Score (0–100) | Weighted Score | Notes |
 |-----------|--------------|---------|----------------|----------------|--------|
-| Academic Qualifications | Education level and relevance | - | [score] | - | [brief note] |
-| General Professional Experience | Years, managerial exposure, relevance | 0.8 | [score] | [score*0.8] | [brief note] |
-| Specific Professional Experience | Relevance to field/geography/EU context | 0.2 | [score] | [score*0.2] | [brief note] |
-| Language & Other Skills | English, communication, IT | - | [score] | - | [brief note] |
+| Academic Qualifications | Education level and relevance | - | {{score}} | - | {{short note}} |
+| General Professional Experience | Years, managerial exposure, relevance | 0.8 | {{score}} | {{score*0.8}} | {{short note}} |
+| Specific Professional Experience | Relevance to field/geography/EU context | 0.2 | {{score}} | {{score*0.2}} | {{short note}} |
+| Language & Other Skills | English, communication, IT | - | {{score}} | - | {{short note}} |
 
-**Total Weighted Score:** [total_score]/100  
+After the table, add:
+
+**Total Weighted Score:** [number]/100  
 **Fit Level:** High / Medium / Low  
 
 ### Major Strengths
-- Bullet points summarizing clear strengths
+- ...
 
 ### Weaknesses / Gaps
-- Bullet points summarizing missing or weak points
+- ...
 
 ### Summary
-Short 3–5 line summary of overall fit.
+Write a 3–5 line summary of the overall fit.
+
+Do not skip or rename any heading. Do not return plain text or prose before the table.
 """
         return self._ask_openai(prompt, temperature=0.25)
 
     # ======================================================
-    # 🧩 ORIGINAL CRITICAL ASSESSMENT (unchanged)
+    # 🧩 CRITICAL ASSESSMENT (unchanged)
     # ======================================================
     def critical_assessment(self, cv_text, expert_section):
         """
