@@ -27,7 +27,6 @@ if tender_file:
 
     st.success(f"Tender uploaded: {tender_file.name}")
 
-    # Load and store tender text
     tender_text = system.load_job_requirements(tender_path)
     st.write(f"📏 Tender text length: {len(tender_text)} characters")
 
@@ -46,30 +45,35 @@ if tender_file and expert_name:
         if tender_file.name.lower().endswith(".docx"):
             expert_section = system.extract_expert_sections_by_bold(tender_path, expert_name)
         else:
-            expert_section = system.load_job_requirements(tender_path)  # fallback for PDFs
+            expert_section = system.load_job_requirements(tender_path)
 
         if expert_section.strip():
             st.success("✅ Expert section(s) extracted successfully!")
             st.subheader("📘 Preview of Extracted Expert Section:")
             expert_section = st.text_area("You can edit the extracted text below before assessment:", value=expert_section, height=400)
         else:
-            st.warning("⚠️ Could not locate that expert section. Try a different phrasing (e.g. 'KE1' or 'Key Expert 1').")
+            st.warning("⚠️ Could not locate that expert section. Try 'KE1' or 'Key Expert 1' etc.")
 
 st.markdown("---")
 
-# --- CV Folder Upload ---
-st.header("3️⃣ Upload Candidate CVs Folder")
+# --- CV Upload ---
+st.header("3️⃣ Upload Candidate CVs")
+cv_files = st.file_uploader("Upload one or more CVs (.docx or .pdf)", type=["docx", "pdf"], accept_multiple_files=True)
 
-cv_folder = st.text_input("Enter path to folder containing CVs (each CV in .docx or .pdf format)")
+uploaded_cv_folder = None
 
-if not cv_folder:
-    st.info("Please provide a valid folder path to proceed.")
+if cv_files:
+    uploaded_cv_folder = tempfile.mkdtemp()
+    for cv_file in cv_files:
+        cv_path = os.path.join(uploaded_cv_folder, cv_file.name)
+        with open(cv_path, "wb") as f:
+            f.write(cv_file.read())
+    st.success(f"✅ {len(cv_files)} CV(s) uploaded and ready for assessment.")
 
 st.markdown("---")
 
 # --- Evaluation Mode Selection ---
 st.header("4️⃣ Choose Evaluation Mode")
-
 mode = st.radio(
     "Select Evaluation Mode:",
     ["Structured Evaluation", "Critical Narrative"],
@@ -80,15 +84,15 @@ st.markdown("---")
 
 # --- Run Assessment ---
 if st.button("🚀 Run Assessment"):
-    if not cv_folder or not os.path.exists(cv_folder):
-        st.error("⚠️ Please provide a valid folder path containing CV files.")
+    if not cv_files:
+        st.error("⚠️ Please upload at least one CV file before running the assessment.")
     elif not expert_section.strip():
         st.error("⚠️ Please extract or provide an Expert Section before running the assessment.")
     else:
         with st.spinner("⏳ Processing CVs — please wait..."):
             try:
                 results = system.process_cv_folder(
-                    cv_folder,
+                    uploaded_cv_folder,
                     expert_section,
                     mode="critical" if mode == "Critical Narrative" else "structured"
                 )
@@ -96,13 +100,12 @@ if st.button("🚀 Run Assessment"):
                 st.success("✅ CV assessment completed!")
 
                 for res in results:
-                    st.subheader(f"👤 {res['candidate_name']}")
-                    st.markdown(res["report"])
-                    if res.get("overall_score"):
-                        st.write(f"**Score:** {res['overall_score']}")
-                    if res.get("fit_level"):
-                        st.write(f"**Fit Level:** {res['fit_level']}")
-                    st.markdown("---")
+                    with st.expander(f"👤 {res['candidate_name']}", expanded=False):
+                        st.markdown(res["report"])
+                        if res.get("overall_score"):
+                            st.write(f"**Score:** {res['overall_score']}")
+                        if res.get("fit_level"):
+                            st.write(f"**Fit Level:** {res['fit_level']}")
 
             except Exception as e:
                 st.error(f"❌ Error during assessment: {e}")
