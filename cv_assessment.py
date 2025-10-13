@@ -19,7 +19,7 @@ class CVAssessmentSystem:
         self.assessments: List[Any] = []
         self.session_id = f"assessment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    # ------------------- 🧠 HYBRID EXPERT EXTRACTION -------------------
+    # ------------------- 🧠 NEW HYBRID EXPERT EXTRACTION -------------------
 
     def extract_expert_sections_by_bold(self, file_path: str, expert_name: str) -> str:
         """
@@ -39,7 +39,7 @@ class CVAssessmentSystem:
         capture = False
         expert_pattern = re.compile(
             rf"(Key\s*Expert\s*\d+|KE\s*\d+|{re.escape(expert_name)})",
-            re.IGNORECASE,
+            re.IGNORECASE
         )
 
         for para in doc.paragraphs:
@@ -151,17 +151,20 @@ class CVAssessmentSystem:
         doc = Document(file_path)
         lines = []
 
+        # --- Read all paragraphs ---
         for p in doc.paragraphs:
             text = p.text.strip()
             if text:
                 lines.append(text)
 
+        # --- Read all tables (flattened row by row) ---
         for table in doc.tables:
             for row in table.rows:
                 row_text = " ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
                 if row_text:
                     lines.append(row_text)
 
+        # --- Merge lines intelligently ---
         merged = []
         buffer = ""
         for line in lines:
@@ -205,7 +208,10 @@ CANDIDATE CV:
             response = self.client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
-                    {"role": "system", "content": "You are an HR evaluation system. Return ONLY valid JSON."},
+                    {
+                        "role": "system",
+                        "content": "You are an HR evaluation system. Return ONLY valid JSON.",
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
@@ -254,10 +260,11 @@ CANDIDATE CV:
                 assessed_at=datetime.now().isoformat(),
             )
 
-    # ------------------- CRITICAL + TAILORING MODE (RESTORED ORIGINAL) -------------------
+    # ------------------- CRITICAL + TAILORING MODE -------------------
 
     def _assess_candidate_critical(self, filename: str, cv_text: str) -> Dict[str, Any]:
-        """Full critical narrative with donor logic and tailored feedback (restored)."""
+        """Critical narrative evaluation with semantic donor detection, regex fallback, and dynamic donor context."""
+
         donor_query = f"""
         Identify the main funding organization mentioned or implied in this tender.
         Return ONLY the donor name (e.g., 'World Bank', 'European Union', 'ADB', 'USAID', 'UNDP', 'AfDB', 'Unknown').
@@ -265,7 +272,6 @@ CANDIDATE CV:
         TENDER TEXT (excerpt):
         {self.job_requirements[:8000]}
         """
-
         donor_match = "Unknown"
         try:
             resp = self.client.chat.completions.create(
@@ -280,12 +286,12 @@ CANDIDATE CV:
 
         text_lower = self.job_requirements.lower()
         donors = {
-            "World Bank": r"\b(world\s*bank|wbg|ifc|ida|ibrd)\b",
-            "European Union": r"\b(european\s*union|eu\s+delegation|europeaid|neighbourhood|dg\s*intl)\b",
-            "Asian Development Bank": r"\b(asian\s+development\s+bank|adb)\b",
-            "USAID": r"\b(usaid|united\s+states\s+agency\s+for\s+international\s+development)\b",
-            "African Development Bank": r"\b(african\s+development\s+bank|afdb)\b",
-            "UNDP": r"\b(undp|united\s+nations\s+development\s+programme)\b",
+            "World Bank": r"\\b(world\\s*bank|wbg|ifc|ida|ibrd)\\b",
+            "European Union": r"\\b(european\\s*union|eu\\s+delegation|europeaid|neighbourhood|dg\\s*intl)\\b",
+            "Asian Development Bank": r"\\b(asian\\s+development\\s+bank|adb)\\b",
+            "USAID": r"\\b(usaid|united\\s+states\\s+agency\\s+for\\s+international\\s+development)\\b",
+            "African Development Bank": r"\\b(african\\s+development\\s+bank|afdb)\\b",
+            "UNDP": r"\\b(undp|united\\s+nations\\s+development\\s+programme)\\b",
         }
         if donor_match == "Unknown":
             for name, pattern in donors.items():
@@ -303,44 +309,8 @@ against the JOB REQUIREMENTS and contextualize every criterion according to {don
 typical focus and terminology.
 Do not mention other donors (EU, ADB, etc.) unless explicitly stated in the tender or CV.
 Focus exclusively on {donor_match} as the donor context.
-
-Return a long, detailed narrative with:
-- Major Strengths
-- Weaknesses
-- Relevance and Fit
-- Executive Summary
-- Tailoring Suggestions
-- Final Score (0–1.0 as “FINAL SCORE: <value>”)
+...
 """
-
-        try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": "You are an expert evaluator for international tenders."},
-                    {"role": "user", "content": f"{prompt}\n\nJOB REQUIREMENTS:\n{self.job_requirements[:8000]}\n\nCANDIDATE CV:\n{cv_text[:9000]}"},
-                ],
-                temperature=0.35,
-                max_tokens=4500,
-            )
-
-            report_text = response.choices[0].message.content.strip()
-            match = re.search(r"FINAL SCORE[:\-]?\s*([0-9]\.?[0-9]*)", report_text, re.IGNORECASE)
-            score = float(match.group(1)) if match else 0.0
-
-            return {
-                "candidate_name": filename,
-                "report": report_text,
-                "final_score": round(score, 2),
-            }
-
-        except Exception as e:
-            print(f"❌ Critical narrative error for {filename}: {e}")
-            return {
-                "candidate_name": filename,
-                "report": f"⚠️ Critical narrative failed: {e}",
-                "final_score": 0.0,
-            }
 
     # ------------------- JSON CLEANER -------------------
 
@@ -349,7 +319,7 @@ Return a long, detailed narrative with:
         content = content.strip()
         content = re.sub(r"^```(json)?", "", content)
         content = re.sub(r"```$", "", content)
-        match = re.search(r"(\{.*\})", content, re.DOTALL)
+        match = re.search(r"(\\{.*\\})", content, re.DOTALL)
         if match:
             return match.group(1).strip()
         return content
