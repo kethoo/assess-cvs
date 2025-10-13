@@ -22,6 +22,19 @@ mode = st.radio("Select Evaluation Mode:", ["Structured (Dashboard)", "Critical 
 req_file = st.file_uploader("📄 Upload Tender / Job Description", type=["pdf", "docx", "doc"])
 tender_text = ""
 
+if req_file:
+    suffix = os.path.splitext(req_file.name)[1] or ".pdf"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(req_file.read())
+        tender_path = tmp.name
+
+    st.success(f"✅ Tender uploaded: {req_file.name}")
+
+    # Load tender text
+    system_temp = CVAssessmentSystem(api_key=api_key or None)
+    tender_text = system_temp.load_job_requirements(tender_path)
+    st.info("📘 Tender text loaded successfully.")
+
 # ------------------- EXPERT NAME -------------------
 
 st.markdown("### 🎯 Enter the Expert Role Title (exactly as in the tender file)")
@@ -56,46 +69,6 @@ def extract_expert_section(full_text: str, expert_name: str) -> str:
 
     return ""
 
-# ------------------- EXPERT SECTION EXTRACTION PREVIEW -------------------
-
-expert_section = ""
-if req_file and expert_name.strip():
-    suffix = os.path.splitext(req_file.name)[1] or ".pdf"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(req_file.read())
-        tender_path = tmp.name
-
-    # Initialize temporary system to extract tender text
-    system_temp = CVAssessmentSystem(api_key=api_key or None)
-    tender_text = system_temp.load_job_requirements(tender_path)
-
-    st.info("📘 Tender text loaded successfully.")
-
-    # 🧩 Try bold + expert-aware extraction first (NEW LOGIC)
-    if req_file.name.lower().endswith(".docx"):
-        expert_section = system_temp.extract_expert_sections_by_bold(tender_path, expert_name)
-        if expert_section and not expert_section.startswith("⚠️"):
-            st.info("🧠 Expert section extracted using bold + expert-aware logic.")
-        else:
-            expert_section = extract_expert_section(tender_text, expert_name)
-    else:
-        # PDF fallback
-        expert_section = extract_expert_section(tender_text, expert_name)
-
-    # If still nothing found
-    if not expert_section or expert_section.startswith("⚠️"):
-        st.warning("⚠️ Could not locate that expert section automatically.")
-    else:
-        st.success(f"✅ Extracted expert section for: {expert_name}")
-
-    # 📝 Editable preview box (visible before assessment)
-    expert_section = st.text_area(
-        "📘 Preview & Edit Extracted Expert Section",
-        expert_section,
-        height=350,
-        help="You can review and edit this section before running the assessment."
-    )
-
 # ------------------- UPLOAD CVS -------------------
 
 cv_files = st.file_uploader(
@@ -106,7 +79,7 @@ cv_files = st.file_uploader(
 
 # ------------------- RUN ASSESSMENT -------------------
 
-if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os.getenv("OPENAI_API_KEY")):
+if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.strip() and (api_key or os.getenv("OPENAI_API_KEY")):
     with tempfile.TemporaryDirectory() as tmpdir:
         cv_folder = os.path.join(tmpdir, "cvs")
         os.makedirs(cv_folder, exist_ok=True)
@@ -122,8 +95,19 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
         # Initialize system
         system = CVAssessmentSystem(api_key=api_key or None)
 
-        # Combine tender + expert section
+        # ------------------- PRIMARY EXTRACTION (REGEX) -------------------
+        expert_section = extract_expert_section(tender_text, expert_name)
+
+        # ------------------- FALLBACK: BOLD-BASED LOGIC -------------------
+        if not expert_section and req_file.name.lower().endswith(".docx"):
+            bold_extraction = system.extract_expert_sections_by_bold(tender_path, expert_name)
+            if bold_extraction and not bold_extraction.startswith("⚠️"):
+                expert_section = bold_extraction
+                st.info("🟨 Expert section extracted using bold-based logic (fallback mode).")
+
+        # ------------------- IF STILL NOTHING FOUND -------------------
         if not expert_section:
+            st.warning("⚠️ Could not precisely locate that expert section. The full tender will be used as fallback context.")
             combined_text = tender_text
         else:
             combined_text = (
@@ -132,10 +116,12 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
                 f"--- SPECIFIC EXPERT REQUIREMENTS (80% weight) ---\n\n"
                 f"{expert_section}"
             )
+            st.success(f"✅ Extracted expert section for: {expert_name}")
+            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:2500], height=250)
+
+        # ------------------- RUN ASSESSMENTS -------------------
 
         system.job_requirements = combined_text
-
-        # Run assessments
         results = system.process_cv_folder(
             cv_folder,
             mode="critical" if mode == "Critical Narrative" else "structured"
@@ -194,4 +180,3 @@ else:
         st.warning("⚠️ Please upload a tender or job description first.")
     elif not cv_files:
         st.warning("⚠️ Please upload at least one candidate CV before running the assessment.")
-
