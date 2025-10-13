@@ -18,6 +18,7 @@ class CVAssessmentSystem:
         self.job_requirements = ""
         self.assessments: List[Any] = []
         self.session_id = f"assessment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.custom_criteria = None  # Store custom criteria
 
     # ------------------- LOAD JOB REQUIREMENTS -------------------
 
@@ -39,8 +40,10 @@ class CVAssessmentSystem:
 
     # ------------------- PROCESS CV FOLDER -------------------
 
-    def process_cv_folder(self, folder_path: str, mode: str = "structured") -> List[Any]:
+    def process_cv_folder(self, folder_path: str, mode: str = "structured", custom_criteria: Dict = None) -> List[Any]:
         """Process all CVs in a folder"""
+        self.custom_criteria = custom_criteria  # Store for use in assessment
+        
         cv_files = []
         for ext in ["*.pdf", "*.PDF", "*.doc", "*.DOC", "*.docx", "*.DOCX"]:
             cv_files.extend(Path(folder_path).glob(ext))
@@ -147,7 +150,7 @@ class CVAssessmentSystem:
         prompt = f"""
 You are an HR evaluator performing a structured, detailed assessment of a candidate.
 
-Compare the candidate’s CV to the job requirements below.
+Compare the candidate's CV to the job requirements below.
 Assign numeric scores (0–100) and provide detailed reasoning for:
 - Education
 - Experience
@@ -221,7 +224,7 @@ CANDIDATE CV:
     # ------------------- CRITICAL + TAILORING MODE -------------------
 
     def _assess_candidate_critical(self, filename: str, cv_text: str) -> Dict[str, Any]:
-        """Critical narrative evaluation with semantic donor detection, regex fallback, and dynamic donor context."""
+        """Critical narrative evaluation with adaptive criteria and weighting."""
 
         # ---------- 1️⃣ Semantic donor detection ----------
         donor_query = f"""
@@ -261,11 +264,56 @@ CANDIDATE CV:
         if donor_match == "Unknown":
             donor_match = "General donor context"
 
-        # ---------- 3️⃣ Build the prompt ----------
+        # ---------- 3️⃣ Build criteria table (custom or default) ----------
+        if self.custom_criteria and 'criteria' in self.custom_criteria:
+            # Build custom criteria table with weights
+            criteria_rows = []
+            criteria_rows.append("| **General Tender Context (20% weight)** | Understanding of project/tender context |  |  |  |")
+            criteria_rows.append("|  | Familiarity with region/country context |  |  |  |")
+            
+            # Add custom criteria with their specific weights
+            for criterion in self.custom_criteria['criteria']:
+                weight_pct = criterion['weight']
+                name = criterion['name']
+                criteria_rows.append(f"| **{name} ({weight_pct}% weight)** | {name} |  |  |  |")
+            
+            criteria_table = "\n".join(criteria_rows)
+            
+            # Build weight explanation
+            weights_explanation = "\n".join([
+                f"- {c['name']}: {c['weight']}% (Rationale: {c['rationale']})"
+                for c in self.custom_criteria['criteria']
+            ])
+            
+            weight_instruction = f"""
+IMPORTANT - CUSTOM WEIGHTING:
+- General Tender Context: 20% total weight (split: 10% project understanding + 10% regional familiarity)
+{weights_explanation}
+
+When calculating the final weighted score:
+1. Score each criterion from 0 to 1
+2. Multiply each score by its weight percentage
+3. Sum all weighted scores to get final score (should be 0-1.00)
+"""
+        else:
+            # Default criteria table (equal weights within 80%)
+            criteria_table = f"""| **General Tender Context (20% weight)** | Understanding of project/tender context |  |  |  |
+|  | Familiarity with region/country context |  |  |  |
+| **Specific Expert Requirements (80% weight)** | Team leadership and management |  |  |  |
+|  | Relevant domain expertise |  |  |  |
+|  | Technical or regulatory knowledge |  |  |  |
+|  | Donor project experience ({donor_match}) |  |  |  |
+|  | Communication and coordination skills |  |  |  |
+|  | Educational background |  |  |  |
+|  | Analytical and reporting skills |  |  |  |
+|  | Language proficiency |  |  |  |"""
+            weight_instruction = "Calculate weighted score: 20% for general context, 80% divided equally among expert requirements."
+
+        # ---------- 4️⃣ Build the prompt ----------
         prompt = f"""
 You are a senior evaluator assessing candidates for a tender funded by **{donor_match}**.
 
-Perform a detailed, evidence-based critical evaluation of the candidate’s CV
+Perform a detailed, evidence-based critical evaluation of the candidate's CV
 against the JOB REQUIREMENTS and contextualize every criterion according to {donor_match}'s
 typical focus and terminology.
 Do not mention other donors (EU, ADB, etc.) unless explicitly stated in the tender or CV.
@@ -281,21 +329,14 @@ Focus exclusively on {donor_match} as the donor context.
 
 | Section | Criteria | Score (0–1) | Confidence | Evaluator Commentary |
 |----------|-----------|-------------|-------------|----------------------|
-| **General Tender Context (20% weight)** | Understanding of project/tender context |  |  |  |
-|  | Familiarity with region/country context |  |  |  |
-| **Specific Expert Requirements (80% weight)** | Team leadership and management |  |  |  |
-|  | Relevant domain expertise |  |  |  |
-|  | Technical or regulatory knowledge |  |  |  |
-|  | Donor project experience ({donor_match}) |  |  |  |
-|  | Communication and coordination skills |  |  |  |
-|  | Educational background |  |  |  |
-|  | Analytical and reporting skills |  |  |  |
-|  | Language proficiency |  |  |  |
+{criteria_table}
 
 Each cell must contain a numeric score (0–1), confidence (High/Medium/Low), and concise commentary (1–3 sentences).
 
+{weight_instruction}
+
 After the table, show:
-**Final Weighted Score (80% expert, 20% context): X.XX / 1.00**
+**Final Weighted Score: X.XX / 1.00**
 
 ---
 
@@ -333,7 +374,7 @@ Provide 5–10 recommended keyword alignments using {donor_match} phrasing.
 {cv_text[:9000]}
 """
 
-        # ---------- 4️⃣ Call GPT ----------
+        # ---------- 5️⃣ Call GPT ----------
         try:
             response = self.client.chat.completions.create(
                 model="gpt-4o",
