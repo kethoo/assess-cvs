@@ -33,45 +33,43 @@ if req_file:
 # --- Expert Name Input ---
 st.markdown("### 🎯 Enter the EXACT Expert Role Title (as in the tender)")
 expert_name = st.text_input(
-    "Example: Team leader Expert in Employment",
-    placeholder="Enter exact expert role title (case-insensitive)"
+    "Example: Key expert 1 (KE 1): Team leader Expert in Employment",
+    placeholder="Enter the exact expert heading (case-insensitive)"
 )
 
-# --- FINAL Expert Section Extraction (Annex-safe version) ---
+# --- FINAL Expert Section Extraction ---
 def extract_expert_section(full_text: str, expert_name: str) -> str:
     """
-    Finds EVERY instance of the exact expert_name and extracts everything that follows
-    until the next 'Key Expert 2', 'KE 2', 'Expert 2', or higher-numbered expert.
-    Ignores internal 'Expert in …' phrases and 'Annex' inside the same block.
+    Capture one continuous section beginning with the first occurrence of expert_name
+    (e.g. 'Key expert 1') and ending just before the next Key Expert 2 or higher.
+    Keeps internal repeats of 'Key Expert 1' and ignores 'Annex' or other words.
     """
     if not full_text or not expert_name:
         return ""
 
-    # Normalize whitespace for cleaner regex behaviour
+    # Normalize whitespace
     text = re.sub(r"\s+", " ", full_text)
 
-    # --- STOP only at Key Expert 2 or higher (Annex removed) ---
-    stop_pattern = re.compile(
+    # Find where this expert first appears
+    start_match = re.search(re.escape(expert_name), text, re.IGNORECASE)
+    if not start_match:
+        return ""
+
+    start_index = start_match.start()
+
+    # Find where the next expert section begins
+    stop_match = re.search(
         r"(?:Key\s*Expert\s*[2-9]\b|KE\s*[2-9]\b|Expert\s+[2-9]\b|Non[-\s]*Key|General\s+Conditions|Terms|Reimbursement|END)",
+        text[start_index:],
         re.IGNORECASE,
     )
 
-    # --- Find all occurrences of the expert name ---
-    starts = [m.start() for m in re.finditer(re.escape(expert_name), text, re.IGNORECASE)]
-    if not starts:
-        return ""
+    end_index = start_index + stop_match.start() if stop_match else len(text)
+    section = text[start_index:end_index]
 
-    sections = []
-    for s in starts:
-        # Find next stop marker after this start
-        stop = stop_pattern.search(text, s)
-        end = stop.start() if stop else len(text)
-        part = text[s:end].strip()
-        if part:
-            sections.append(part)
-
-    # Join all found sections
-    return "\n\n---\n\n".join(sections)
+    # Clean spacing
+    section = re.sub(r"\s{2,}", " ", section).strip()
+    return section
 
 
 # --- Upload CVs ---
