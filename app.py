@@ -37,28 +37,32 @@ expert_name = st.text_input(
     placeholder="Enter the expert role title or partial match (e.g., 'Key Expert 1', 'Procurement Expert')"
 )
 
-# --- Smart Expert Section Extraction ---
+
+# --- Enhanced Expert Section Extraction ---
 def extract_expert_section(full_text: str, expert_name: str) -> str:
     """
-    Extracts the full text for a specific expert, including both table and paragraph content.
-    Handles multiple formatting styles.
+    Extracts ALL text sections for a specific expert, including both table and paragraph content.
+    Handles multiple appearances and formatting variants.
     """
     if not full_text or not expert_name:
         return ""
 
-    # More flexible: stops at the next "Key Expert", "Expert in", "Annex", or "Non-key"
+    # Flexible pattern: stops at the next expert or annex section
     pattern = re.compile(
         rf"({re.escape(expert_name)}.*?)(?=(?:Key\s*Expert\s*\d|KE\s*\d|Expert\s+in|Non[-\s]*Key|Annex|General\s+Conditions|Terms|END|$))",
         re.IGNORECASE | re.DOTALL,
     )
 
-    match = pattern.search(full_text)
-    if match:
-        section = match.group(1)
-        # Clean extra spacing and weird line breaks
-        section = re.sub(r"\n{2,}", "\n", section)
-        section = re.sub(r"\s{2,}", " ", section)
-        return section.strip()
+    matches = pattern.findall(full_text)
+
+    if matches:
+        sections = []
+        for section in matches:
+            section = re.sub(r"\n{2,}", "\n", section)
+            section = re.sub(r"\s{2,}", " ", section)
+            sections.append(section.strip())
+        # Join multiple occurrences with separator
+        return "\n\n---\n\n".join(sections)
 
     return ""
 
@@ -148,4 +152,3 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
 else:
     if not expert_name.strip():
         st.warning("⚠️ Please enter the expert role title before running the assessment.")
-
