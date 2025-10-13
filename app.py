@@ -30,7 +30,7 @@ if req_file:
     tender_text = system_temp.load_job_requirements(tender_path)
     st.info("📘 Tender text loaded successfully.")
 
-    # --- 🔍 DEBUG: Inspect end of tender text ---
+    # --- Optional debug for checking tender completeness ---
     st.write(f"Tender text length: {len(tender_text)} characters")
     if st.checkbox("Show tail of tender (last 1000 chars)"):
         st.text(tender_text[-1000:])
@@ -45,34 +45,40 @@ expert_name = st.text_input(
 # --- FINAL Expert Section Extraction ---
 def extract_expert_section(full_text: str, expert_name: str) -> str:
     """
-    Capture one continuous section beginning with the first occurrence of expert_name
-    (e.g. 'Key expert 1') and ending just before the next Key Expert 2 or higher.
-    Keeps internal repeats of 'Key Expert 1' and ignores 'Annex' or other words.
+    Extract one continuous expert block:
+    - Starts at the first occurrence of expert_name (e.g. 'Key Expert 1').
+    - Ends just before the next higher-numbered expert (Key Expert 2+).
+    - Ignores internal repeats of the same expert number.
     """
     if not full_text or not expert_name:
         return ""
 
-    # Normalize whitespace
     text = re.sub(r"\s+", " ", full_text)
 
-    # Find where this expert first appears
+    # Detect which expert number is requested
+    num_match = re.search(r"\bKey\s*Expert\s*(\d+)\b|\bKE\s*(\d+)\b|\bExpert\s*(\d+)\b", expert_name, re.IGNORECASE)
+    current_num = None
+    if num_match:
+        current_num = int(next(n for n in num_match.groups() if n))
+    next_num = (current_num + 1) if current_num else 2
+
+    # Find start
     start_match = re.search(re.escape(expert_name), text, re.IGNORECASE)
     if not start_match:
         return ""
 
     start_index = start_match.start()
 
-    # Find where the next expert section begins
-    stop_match = re.search(
-        r"(?:Key\s*Expert\s*[2-9]\b|KE\s*[2-9]\b|Expert\s+[2-9]\b|Non[-\s]*Key|General\s+Conditions|Terms|Reimbursement|END)",
-        text[start_index:],
+    # Stop only at the *next* expert number or higher
+    stop_pattern = re.compile(
+        rf"(?:Key\s*Expert\s*(?:{next_num}|[1-9]\d*)\b|KE\s*(?:{next_num}|[1-9]\d*)\b|Expert\s*(?:{next_num}|[1-9]\d*)\b|Non[-\s]*Key|General\s+Conditions|Terms|Reimbursement|END)",
         re.IGNORECASE,
     )
 
+    stop_match = stop_pattern.search(text, start_index)
     end_index = start_index + stop_match.start() if stop_match else len(text)
-    section = text[start_index:end_index]
 
-    # Clean spacing
+    section = text[start_index:end_index]
     section = re.sub(r"\s{2,}", " ", section).strip()
     return section
 
@@ -115,7 +121,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 f"{expert_section}"
             )
             st.success(f"✅ Extracted expert section for: {expert_name}")
-            st.text_area("📘 Preview of Extracted Expert Section", expert_section, height=350)
+            st.text_area("📘 Preview of Extracted Expert Section", expert_section, height=600)
 
         # Assign requirements text for evaluation
         system.job_requirements = combined_text
@@ -161,3 +167,4 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
 else:
     if not expert_name.strip():
         st.warning("⚠️ Please enter the expert role title before running the assessment.")
+
