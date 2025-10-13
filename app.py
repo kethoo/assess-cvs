@@ -10,6 +10,13 @@ from docx import Document
 st.set_page_config(page_title="Deep CV Assessment System", layout="wide")
 st.title("📄 Deep CV Assessment System")
 
+# ------------------- SESSION STATE INITIALIZATION (MUST BE FIRST) -------------------
+
+if 'extracted_section' not in st.session_state:
+    st.session_state.extracted_section = ""
+if 'section_extracted' not in st.session_state:
+    st.session_state.section_extracted = False
+
 # ------------------- API KEY -------------------
 
 api_key = st.text_input("🔑 Enter OpenAI API Key", type="password")
@@ -39,28 +46,17 @@ if req_file:
 
 # ------------------- EXPERT NAME -------------------
 
-st.markdown("### 🎯 Enter the Expert Role Title (exactly as in the tender file)")
+st.markdown("### 🎯 Enter the Expert Role Title")
 expert_name = st.text_input(
     "Example: Key Expert 1, Team Leader",
-    placeholder="Enter the expert role title (e.g., 'Key Expert 1', 'Expert 2', 'KE 1')"
+    placeholder="Type 'Key Expert 1', 'Key expert 1', etc.",
+    key="expert_name_input"
 )
 
-# ------------------- SESSION STATE INITIALIZATION -------------------
-
-if 'extracted_section' not in st.session_state:
-    st.session_state.extracted_section = ""
-if 'section_extracted' not in st.session_state:
-    st.session_state.section_extracted = False
-
-# ------------------- SIMPLE EXTRACTION -------------------
+# ------------------- EXTRACTION FUNCTIONS -------------------
 
 def extract_expert_section(file_path: str, expert_name: str) -> str:
-    """
-    Simple extraction:
-    - Start at expert name
-    - Within expert: separate bold sections with ----------------------------------------------------------
-    - Stop at: next expert OR (if last expert) first bold section
-    """
+    """Extract expert section from Word document"""
     if not file_path or not expert_name:
         return ""
     
@@ -73,29 +69,26 @@ def extract_expert_section(file_path: str, expert_name: str) -> str:
         started = False
         current_text = []
         
-        # Extract number from expert name (e.g., "1" from "Key Expert 1")
+        # Extract number from expert name
         expert_num_match = re.search(r'(\d+)', expert_name)
         my_number = expert_num_match.group(1) if expert_num_match else None
         
-        # Helper: Check if paragraph is bold
         def is_bold(para):
             if not para.runs:
                 return False
             bold_runs = sum(1 for r in para.runs if r.bold)
             return bold_runs > len(para.runs) / 2
         
-        # Helper: Check if text mentions a different expert number
         def is_different_expert(text):
             if not my_number:
                 return False
-            # Look for "Key Expert N" or "Expert N" or "KE N" with different number
             matches = re.findall(r'(?:key\s+expert|expert|ke)\s*[:\-\(]?\s*(?:ke\s*)?(\d+)', text, re.IGNORECASE)
             for found_num in matches:
                 if found_num != my_number:
                     return True
             return False
         
-        # Step 1: Find if there's a next expert (to know if this is the last one)
+        # Check if this is the last expert
         all_text = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
         found_start = False
         is_last_expert = True
@@ -109,13 +102,13 @@ def extract_expert_section(file_path: str, expert_name: str) -> str:
                     is_last_expert = False
                     break
         
-        # Step 2: Extract the section
+        # Extract the section
         for para in doc.paragraphs:
             text = para.text.strip()
             if not text:
                 continue
             
-            # Start extraction when we find the expert name
+            # Start extraction
             if not started:
                 if expert_name.lower() in text.lower():
                     started = True
@@ -124,36 +117,33 @@ def extract_expert_section(file_path: str, expert_name: str) -> str:
             
             # Once started...
             if started:
-                # STOP: If we hit a different expert
+                # STOP: Different expert
                 if is_different_expert(text):
                     break
                 
-                # STOP: If this is the LAST expert and we hit a bold section
+                # STOP: Last expert + bold
                 if is_last_expert and is_bold(para):
                     break
                 
-                # CONTINUE: If NOT last expert, bold sections are just subsections
+                # CONTINUE: Bold subsection (not last expert)
                 if not is_last_expert and is_bold(para):
-                    # Save current text
                     if current_text:
                         result_parts.append(' '.join(current_text))
                         current_text = []
-                    # Add separator
                     result_parts.append('\n----------------------------------------------------------\n')
                     result_parts.append(text)
                 else:
-                    # Regular text
                     current_text.append(text)
         
-        # Add remaining text
+        # Add remaining
         if current_text:
             result_parts.append(' '.join(current_text))
         
         return '\n\n'.join(result_parts).strip()
     
     except Exception as e:
-        st.error(f"Error: {e}")
-        return extract_from_text(tender_text, expert_name)
+        st.error(f"Extraction error: {e}")
+        return ""
 
 
 def extract_from_text(full_text: str, expert_name: str) -> str:
@@ -161,12 +151,10 @@ def extract_from_text(full_text: str, expert_name: str) -> str:
     if not full_text or not expert_name:
         return ""
     
-    # Get expert number
     num_match = re.search(r'(\d+)', expert_name)
     my_num = num_match.group(1) if num_match else None
     
     if my_num:
-        # Stop at next expert with different number
         pattern = rf"({re.escape(expert_name)}.*?)(?=(?:key\s+expert|expert|ke)\s*[:\-\(]?\s*(?!{my_num})\d+|$)"
     else:
         pattern = rf"({re.escape(expert_name)}.*?)(?=expert\s+\d+|$)"
@@ -177,26 +165,31 @@ def extract_from_text(full_text: str, expert_name: str) -> str:
     
     return ""
 
-# ------------------- EXTRACT EXPERT SECTION BUTTON -------------------
+# ------------------- EXTRACT BUTTON -------------------
 
-if st.button("🔍 Extract Expert Section", disabled=not (req_file and expert_name.strip() and tender_path)):
+extract_button = st.button("🔍 Extract Expert Section", disabled=not (req_file and expert_name.strip() and tender_path))
+
+if extract_button:
     with st.spinner("Extracting..."):
+        st.write(f"Debug: Looking for '{expert_name}'")
         
         if req_file.name.lower().endswith('.docx'):
             expert_section = extract_expert_section(tender_path, expert_name)
         else:
             expert_section = extract_from_text(tender_text, expert_name)
         
+        st.write(f"Debug: Extracted {len(expert_section)} characters")
+        
         if expert_section:
             st.session_state.extracted_section = expert_section
             st.session_state.section_extracted = True
-            st.success(f"✅ Extracted section for: {expert_name}")
+            st.success(f"✅ Extracted {len(expert_section)} characters for: {expert_name}")
         else:
             st.session_state.extracted_section = ""
             st.session_state.section_extracted = False
-            st.warning("⚠️ Could not find that expert. Paste manually below.")
+            st.warning("⚠️ Nothing found. Try different spelling or paste manually below.")
 
-# ------------------- EDITABLE PREVIEW SECTION -------------------
+# ------------------- EDITABLE PREVIEW -------------------
 
 if req_file and expert_name.strip():
     st.markdown("### 📝 Expert Section Preview & Edit")
@@ -205,15 +198,16 @@ if req_file and expert_name.strip():
         "Expert Section Content (editable)",
         value=st.session_state.extracted_section,
         height=400,
-        help="This section will be used with 80% weight. Edit as needed.",
+        help="Edit as needed. This will be used with 80% weight.",
         key="expert_section_editor"
     )
     
+    # Update session state
     st.session_state.extracted_section = edited_section
     
     if edited_section:
         separator_count = edited_section.count('----------------------------------------------------------')
-        st.info(f"📊 Length: {len(edited_section)} characters | Subsections: {separator_count + 1}")
+        st.info(f"📊 {len(edited_section)} chars | {separator_count + 1} subsections")
 
 # ------------------- UPLOAD CVS -------------------
 
@@ -241,7 +235,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
         expert_section = st.session_state.extracted_section
 
         if not expert_section:
-            st.warning("⚠️ No expert section. Using full tender as context.")
+            st.warning("⚠️ No expert section. Using full tender.")
             combined_text = tender_text
         else:
             combined_text = (
@@ -250,7 +244,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 f"--- SPECIFIC EXPERT REQUIREMENTS (80% weight) ---\n\n"
                 f"{expert_section}"
             )
-            st.success(f"✅ Using expert section for: {expert_name}")
+            st.success(f"✅ Using expert section")
 
         system.job_requirements = combined_text
         results = system.process_cv_folder(
@@ -260,7 +254,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
 
         st.success(f"✅ Processed {len(results)} candidate(s)")
 
-        # ------------------- STRUCTURED MODE -------------------
+        # ------------------- DISPLAY RESULTS -------------------
 
         if mode == "Structured (Dashboard)":
             ranked = sorted(results, key=lambda x: x.overall_score, reverse=True)
@@ -274,8 +268,6 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 }
                 for i, r in enumerate(ranked)
             ])
-
-        # ------------------- CRITICAL MODE -------------------
 
         else:
             ranked = sorted(results, key=lambda x: x.get("final_score", 0), reverse=True)
@@ -299,15 +291,14 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                             st.markdown("✂️ Tailoring Suggestions" + tailoring)
                     else:
                         st.markdown(report)
-
                     st.markdown(f"**🧮 Final Score:** {r['final_score']:.2f} / 1.00")
 
-# ------------------- SAFEGUARDS -------------------
+# ------------------- WARNINGS -------------------
 
 else:
     if not expert_name.strip():
-        st.warning("⚠️ Please enter the expert role title.")
+        st.warning("⚠️ Enter expert role title")
     elif not req_file:
-        st.warning("⚠️ Please upload a tender file.")
+        st.warning("⚠️ Upload tender file")
     elif not cv_files:
-        st.warning("⚠️ Please upload at least one CV.")
+        st.warning("⚠️ Upload CVs")
