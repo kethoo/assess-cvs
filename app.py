@@ -3,111 +3,107 @@ import tempfile
 import os
 from cv_assessment import CVAssessmentSystem
 
+# ======================================================
+# 🎯 Streamlit App Setup
+# ======================================================
+st.set_page_config(page_title="CV Assessment System", layout="wide")
+st.title("📊 CV Assessment System")
 
-st.set_page_config(page_title="CV Assessor", layout="wide")
-st.title("📄 CV Assessment Tool")
+st.markdown("""
+Use this tool to evaluate CVs against tender requirements.
 
-# Keep expert section persistent
-if "expert_section" not in st.session_state:
-    st.session_state.expert_section = ""
+**Steps:**
+1. Upload the tender (Word or PDF)
+2. Enter the exact expert position name (e.g. “Key Expert 1” or “KE1”)
+3. Extract and review the expert section (editable)
+4. Upload CVs for assessment
+""")
 
-api_key = st.text_input("🔑 Enter your OpenAI API Key", type="password")
-system = CVAssessmentSystem(api_key=api_key)
+# ======================================================
+# ⚙️ Initialize System
+# ======================================================
+api_key = st.text_input("🔑 Enter your OpenAI API key:", type="password")
+system = CVAssessmentSystem(api_key=api_key) if api_key else None
 
-st.markdown("---")
+if not api_key:
+    st.warning("Please enter your OpenAI API key to continue.")
+    st.stop()
 
-# --- 1️⃣ Upload Tender File ---
-st.header("1️⃣ Upload Tender File")
-tender_file = st.file_uploader("Upload the Tender Document (.docx or .pdf)", type=["docx", "pdf", "txt"])
+# ======================================================
+# 📄 Upload Tender File
+# ======================================================
+tender_file = st.file_uploader("📁 Upload Tender File (DOCX or PDF)", type=["docx", "pdf"])
+expert_name = st.text_input("🎯 Enter Expert Position Name (e.g. 'Key Expert 1', 'KE1', 'Key Expert 2')")
 
-tender_path = None
-if tender_file:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(tender_file.name)[1]) as tmp:
-        tmp.write(tender_file.read())
-        tender_path = tmp.name
-    st.success(f"Tender uploaded: {tender_file.name}")
-
-st.markdown("---")
-
-# --- 2️⃣ Extract Expert Section ---
-st.header("2️⃣ Extract Expert Section")
-expert_name = st.text_input("Enter Expert Role (e.g., 'Key Expert 1', 'KE1', or 'Key expert 2')")
+expert_section_text = ""
 
 if tender_file and expert_name:
-    if st.button("📘 Extract Expert Section"):
-        extracted = system.extract_expert_sections_by_bold(tender_path, expert_name)
-        if extracted.strip():
-            st.session_state.expert_section = extracted
-            st.success("✅ Expert section(s) extracted successfully!")
-        else:
-            st.warning("⚠️ Could not locate that expert section. Try a slightly different phrasing.")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(tender_file.name)[1]) as tmp:
+        tmp.write(tender_file.read())
+        tmp_path = tmp.name
 
-# --- 📘 Expert Section Preview / Edit ---
-if st.session_state.expert_section.strip():
-    st.subheader("📘 Expert Section Preview (Editable):")
-    st.session_state.expert_section = st.text_area(
-        "You can edit the extracted section before assessment:",
-        value=st.session_state.expert_section,
-        height=400,
-    )
+    with st.spinner("🔍 Extracting expert section..."):
+        expert_section_text = system.extract_expert_sections_by_bold(tmp_path, expert_name)
 
-st.markdown("---")
+    if expert_section_text.strip():
+        st.success(f"✅ Extracted Expert Section for '{expert_name}'")
 
-# --- 3️⃣ Upload CVs ---
-st.header("3️⃣ Upload Candidate CVs")
-cv_files = st.file_uploader("Upload one or more CVs (.docx or .pdf)", type=["docx", "pdf"], accept_multiple_files=True)
-uploaded_cv_folder = None
+        # -----------------------------------------------------
+        # 🧩 Editable Preview before Assessment
+        # -----------------------------------------------------
+        st.subheader("📘 Preview of Extracted Expert Section (editable)")
+        edited_expert_text = st.text_area("You can refine this text before assessment:", expert_section_text, height=400)
 
-if cv_files:
-    uploaded_cv_folder = tempfile.mkdtemp()
-    for cv_file in cv_files:
-        cv_path = os.path.join(uploaded_cv_folder, cv_file.name)
-        with open(cv_path, "wb") as f:
-            f.write(cv_file.read())
-    st.success(f"✅ {len(cv_files)} CV(s) uploaded and ready for assessment.")
-
-st.markdown("---")
-
-# --- 4️⃣ Choose Mode ---
-st.header("4️⃣ Choose Evaluation Mode")
-mode = st.radio(
-    "Select Evaluation Mode:",
-    ["Structured Evaluation", "Critical Narrative"],
-    horizontal=True
-)
-
-st.markdown("---")
-
-# --- 5️⃣ Run Assessment ---
-if st.button("🚀 Run Assessment"):
-    if not cv_files:
-        st.error("⚠️ Please upload at least one CV before running.")
-    elif not st.session_state.expert_section.strip():
-        st.error("⚠️ Please extract or provide an Expert Section first.")
+        expert_section_text = edited_expert_text
     else:
-        with st.spinner("⏳ Processing CVs — please wait..."):
-            try:
-                results = system.process_cv_folder(
-                    uploaded_cv_folder,
-                    st.session_state.expert_section,
-                    mode="critical" if mode == "Critical Narrative" else "structured"
-                )
-                st.success("✅ CV assessment completed!")
+        st.warning("⚠️ Could not precisely locate that expert section. Please verify the name or content.")
+        expert_section_text = ""
 
-                for res in results:
-                    with st.expander(f"👤 {res['candidate_name']}", expanded=False):
-                        st.markdown(res["report"])
-                        if res.get("overall_score"):
-                            st.write(f"**Score:** {res['overall_score']}")
-                        if res.get("fit_level"):
-                            st.write(f"**Fit Level:** {res['fit_level']}")
-                        st.markdown("---")
+# ======================================================
+# 🧾 Upload CV Folder
+# ======================================================
+cv_folder = st.text_input("📂 Enter CV Folder Path (on this server):")
 
-            except Exception as e:
-                st.error(f"❌ Error during assessment: {e}")
+if not cv_folder:
+    st.info("Please provide the path to the folder containing CV files (.docx or .pdf).")
+    st.stop()
 
-st.markdown("---")
+mode = st.radio("🧠 Choose Evaluation Mode", ["Structured (80/20 Scoring)", "Critical Narrative"], horizontal=True)
 
-if st.button("🧹 Clear Expert Section"):
-    st.session_state.expert_section = ""
-    st.success("Expert section cleared. You can extract another one now.")
+if st.button("🚀 Run Assessment"):
+    if not expert_section_text.strip():
+        st.warning("⚠️ Please extract or provide an Expert Section before running the assessment.")
+        st.stop()
+
+    with st.spinner("⏳ Processing CVs — please wait..."):
+        results = system.process_cv_folder(
+            cv_folder=cv_folder,
+            expert_section=expert_section_text,
+            mode="critical" if "Critical" in mode else "structured"
+        )
+
+    if results:
+        st.success("✅ Assessment Complete!")
+
+        for res in results:
+            st.markdown("---")
+            st.subheader(f"👤 Candidate: {res['candidate_name']}")
+            if res.get("overall_score") is not None:
+                st.write(f"**Overall Score:** {res['overall_score']}/100")
+            if res.get("fit_level"):
+                st.write(f"**Fit Level:** {res['fit_level']}")
+
+            st.markdown("### 📋 Evaluation Report")
+
+            # ======================================================
+            # 🧩 FIXED: Proper Markdown Rendering for Tables
+            # ======================================================
+            report = res["report"].strip()
+            if report.startswith("|") or "### Evaluation Summary Table" in report:
+                # Markdown mode: show tables & headings nicely formatted
+                st.markdown("\n" + report, unsafe_allow_html=False)
+            else:
+                # Fallback for narrative outputs
+                st.text(report)
+    else:
+        st.warning("⚠️ No results generated. Please check your inputs.")
