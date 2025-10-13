@@ -43,6 +43,13 @@ expert_name = st.text_input(
     placeholder="Enter the expert role title or partial match (e.g., 'Key Expert 1', 'Procurement Expert')"
 )
 
+# ------------------- SESSION STATE INITIALIZATION -------------------
+
+if 'extracted_section' not in st.session_state:
+    st.session_state.extracted_section = ""
+if 'section_extracted' not in st.session_state:
+    st.session_state.section_extracted = False
+
 # ------------------- REGEX-BASED EXTRACTION FUNCTION -------------------
 
 def extract_expert_section(full_text: str, expert_name: str) -> str:
@@ -68,6 +75,53 @@ def extract_expert_section(full_text: str, expert_name: str) -> str:
         return section.strip()
 
     return ""
+
+# ------------------- EXTRACT EXPERT SECTION BUTTON -------------------
+
+if st.button("🔍 Extract Expert Section", disabled=not (req_file and expert_name.strip())):
+    with st.spinner("Extracting expert section..."):
+        # Initialize system for potential bold-based extraction
+        system = CVAssessmentSystem(api_key=api_key or None)
+        
+        # PRIMARY EXTRACTION (REGEX)
+        expert_section = extract_expert_section(tender_text, expert_name)
+        
+        # FALLBACK: BOLD-BASED LOGIC
+        if not expert_section and req_file.name.lower().endswith(".docx"):
+            bold_extraction = system.extract_expert_sections_by_bold(tender_path, expert_name)
+            if bold_extraction and not bold_extraction.startswith("⚠️"):
+                expert_section = bold_extraction
+                st.info("🟨 Expert section extracted using bold-based logic (fallback mode).")
+        
+        # Store in session state
+        if expert_section:
+            st.session_state.extracted_section = expert_section
+            st.session_state.section_extracted = True
+            st.success(f"✅ Extracted expert section for: {expert_name}")
+        else:
+            st.session_state.extracted_section = ""
+            st.session_state.section_extracted = False
+            st.warning("⚠️ Could not precisely locate that expert section. You can manually enter/paste it below, or the full tender will be used as fallback.")
+
+# ------------------- EDITABLE PREVIEW SECTION -------------------
+
+if req_file and expert_name.strip():
+    st.markdown("### 📝 Expert Section Preview & Edit")
+    st.markdown("*You can review and edit the extracted section below before running the assessment:*")
+    
+    edited_section = st.text_area(
+        "Expert Section Content (editable)",
+        value=st.session_state.extracted_section,
+        height=400,
+        help="This section will be used with 80% weight in the assessment. Edit as needed.",
+        key="expert_section_editor"
+    )
+    
+    # Update session state with edited content
+    st.session_state.extracted_section = edited_section
+    
+    if edited_section:
+        st.info(f"📊 Section length: {len(edited_section)} characters")
 
 # ------------------- UPLOAD CVS -------------------
 
@@ -95,19 +149,12 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
         # Initialize system
         system = CVAssessmentSystem(api_key=api_key or None)
 
-        # ------------------- PRIMARY EXTRACTION (REGEX) -------------------
-        expert_section = extract_expert_section(tender_text, expert_name)
+        # ------------------- USE EDITED EXPERT SECTION -------------------
+        expert_section = st.session_state.extracted_section
 
-        # ------------------- FALLBACK: BOLD-BASED LOGIC -------------------
-        if not expert_section and req_file.name.lower().endswith(".docx"):
-            bold_extraction = system.extract_expert_sections_by_bold(tender_path, expert_name)
-            if bold_extraction and not bold_extraction.startswith("⚠️"):
-                expert_section = bold_extraction
-                st.info("🟨 Expert section extracted using bold-based logic (fallback mode).")
-
-        # ------------------- IF STILL NOTHING FOUND -------------------
+        # ------------------- IF NOTHING IN EDITOR -------------------
         if not expert_section:
-            st.warning("⚠️ Could not precisely locate that expert section. The full tender will be used as fallback context.")
+            st.warning("⚠️ No expert section provided. The full tender will be used as context.")
             combined_text = tender_text
         else:
             combined_text = (
@@ -116,8 +163,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 f"--- SPECIFIC EXPERT REQUIREMENTS (80% weight) ---\n\n"
                 f"{expert_section}"
             )
-            st.success(f"✅ Extracted expert section for: {expert_name}")
-            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:2500], height=250)
+            st.success(f"✅ Using expert section for: {expert_name}")
 
         # ------------------- RUN ASSESSMENTS -------------------
 
