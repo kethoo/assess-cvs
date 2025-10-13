@@ -30,7 +30,7 @@ if req_file:
     tender_text = system_temp.load_job_requirements(tender_path)
     st.info("📘 Tender text loaded successfully.")
 
-    # --- Debug: view tender length or ending ---
+    # Optional debug (to inspect raw tender end)
     st.write(f"Tender text length: {len(tender_text)} characters")
     if st.checkbox("Show tail of tender (last 1000 chars)"):
         st.text(tender_text[-1000:])
@@ -42,7 +42,7 @@ expert_name = st.text_input(
     placeholder="Enter the exact expert heading (case-insensitive)"
 )
 
-# --- FINAL Expert Section Extraction ---
+# --- Expert Section Extraction ---
 def extract_expert_section(full_text: str, expert_name: str) -> str:
     """
     Extract all 'Key Expert N' sections:
@@ -53,21 +53,20 @@ def extract_expert_section(full_text: str, expert_name: str) -> str:
     if not full_text or not expert_name:
         return ""
 
-    # Normalize whitespace
     text = re.sub(r"\s+", " ", full_text)
 
-    # Identify which expert number we’re extracting (default 1)
+    # Identify which expert number to extract (default 1)
     num_match = re.search(r"\bKey\s*Expert\s*(\d+)\b", expert_name, re.IGNORECASE)
     current_num = int(num_match.group(1)) if num_match else 1
     next_num = current_num + 1
 
-    # Find all occurrences of this expert name
+    # Find all starting points
     pattern_start = re.compile(re.escape(expert_name), re.IGNORECASE)
     starts = [m.start() for m in pattern_start.finditer(text)]
     if not starts:
         return ""
 
-    # Define where to stop (Key Expert next number)
+    # Define stop pattern (next expert)
     stop_pattern = re.compile(
         rf"(?:(?<!\d)(?:Key|KE)?\s*Expert\s*{next_num}\b)",
         re.IGNORECASE,
@@ -81,7 +80,6 @@ def extract_expert_section(full_text: str, expert_name: str) -> str:
         if block:
             sections.append(block)
 
-    # Join all sections with separator
     return "\n\n---------------\n\n".join(sections)
 
 
@@ -92,13 +90,32 @@ cv_files = st.file_uploader(
     accept_multiple_files=True
 )
 
-# --- Run Assessment ---
-if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.strip() and (api_key or os.getenv("OPENAI_API_KEY")):
+# --- Step 1: Extract and Show Editable Preview ---
+edited_expert_section = ""
+if st.button("📘 Extract Expert Section") and req_file and expert_name.strip():
+    expert_section = extract_expert_section(tender_text, expert_name)
+    if not expert_section:
+        st.warning("⚠️ Could not locate that expert section.")
+    else:
+        st.success(f"✅ Extracted expert section(s) for: {expert_name}")
+        edited_expert_section = st.text_area(
+            "✏️ Preview & Edit Extracted Expert Section (you can modify text before running assessment):",
+            expert_section,
+            height=700,
+        )
+
+# --- Step 2: Run Assessment on Edited Section ---
+if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os.getenv("OPENAI_API_KEY")):
+    # If user has edited the section, keep it; otherwise extract fresh
+    if not edited_expert_section:
+        expert_section = extract_expert_section(tender_text, expert_name)
+    else:
+        expert_section = edited_expert_section
+
     with tempfile.TemporaryDirectory() as tmpdir:
         cv_folder = os.path.join(tmpdir, "cvs")
         os.makedirs(cv_folder, exist_ok=True)
 
-        # Save uploaded CVs
         for file in cv_files:
             path = os.path.join(cv_folder, file.name)
             with open(path, "wb") as f:
@@ -109,11 +126,8 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
         # Initialize system
         system = CVAssessmentSystem(api_key=api_key or None)
 
-        # Extract expert section dynamically
-        expert_section = extract_expert_section(tender_text, expert_name)
-
+        # Combine tender and edited expert text
         if not expert_section:
-            st.warning("⚠️ Could not locate that expert section. Using full tender as fallback context.")
             combined_text = tender_text
         else:
             combined_text = (
@@ -122,10 +136,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 f"--- SPECIFIC EXPERT REQUIREMENTS (80% weight) ---\n\n"
                 f"{expert_section}"
             )
-            st.success(f"✅ Extracted expert section(s) for: {expert_name}")
-            st.text_area("📘 Preview of Extracted Expert Section", expert_section, height=700)
 
-        # Assign requirements text for evaluation
         system.job_requirements = combined_text
 
         # Process CVs
@@ -165,7 +176,6 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                     else:
                         st.markdown(report)
                     st.markdown(f"**🧮 Final Score:** {r['final_score']:.2f} / 1.00")
-
 else:
     if not expert_name.strip():
         st.warning("⚠️ Please enter the expert role title before running the assessment.")
