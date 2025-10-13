@@ -19,12 +19,13 @@ class CVAssessmentSystem:
         self.assessments: List[Any] = []
         self.session_id = f"assessment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    # ------------------- 🧠 NEW HYBRID EXPERT EXTRACTION -------------------
+    # ------------------- 🧠 HYBRID EXPERT EXTRACTOR -------------------
 
     def extract_expert_sections_by_bold(self, file_path: str, expert_name: str) -> str:
         """
         Extracts expert sections using both bold text markers and expert numbering logic.
         Starts from the expert_name match and continues until another expert section or bold heading appears.
+        Stops before the next expert (Key Expert 2 etc.) so nothing from that section appears.
         Joins multiple found sections with '--------------'.
         """
         from docx import Document
@@ -39,7 +40,7 @@ class CVAssessmentSystem:
         capture = False
         expert_pattern = re.compile(
             rf"(Key\s*Expert\s*\d+|KE\s*\d+|{re.escape(expert_name)})",
-            re.IGNORECASE
+            re.IGNORECASE,
         )
 
         for para in doc.paragraphs:
@@ -48,7 +49,10 @@ class CVAssessmentSystem:
                 continue
 
             # Detect bold headings (potential new expert section)
-            is_bold_heading = any(run.bold for run in para.runs if run.text.strip()) and len(text.split()) < 12
+            is_bold_heading = (
+                any(run.bold for run in para.runs if run.text.strip())
+                and len(text.split()) < 15
+            )
 
             # Start capturing when the expert title matches
             if expert_pattern.search(text):
@@ -58,7 +62,13 @@ class CVAssessmentSystem:
                 capture = True
 
             # Stop when we hit a new expert or a new bold heading
-            elif capture and (re.search(r"Key\s*Expert\s*\d+", text, re.IGNORECASE) or is_bold_heading):
+            elif capture and (
+                re.search(r"Key\s*Expert\s*\d+", text, re.IGNORECASE) or is_bold_heading
+            ):
+                # hard stop before new expert line
+                cutoff = re.split(r"(?=Key\s*Expert\s*\d+|KE\s*\d+)", text, 1)[0].strip()
+                if cutoff:
+                    current_section.append(cutoff)
                 sections.append(" ".join(current_section).strip())
                 current_section = []
                 capture = False
@@ -160,7 +170,9 @@ class CVAssessmentSystem:
         # --- Read all tables (flattened row by row) ---
         for table in doc.tables:
             for row in table.rows:
-                row_text = " ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                row_text = " ".join(
+                    cell.text.strip() for cell in row.cells if cell.text.strip()
+                )
                 if row_text:
                     lines.append(row_text)
 
@@ -260,57 +272,72 @@ CANDIDATE CV:
                 assessed_at=datetime.now().isoformat(),
             )
 
-    # ------------------- CRITICAL + TAILORING MODE -------------------
+    # ------------------- CRITICAL (NARRATIVE) MODE -------------------
 
     def _assess_candidate_critical(self, filename: str, cv_text: str) -> Dict[str, Any]:
-        """Critical narrative evaluation with semantic donor detection, regex fallback, and dynamic donor context."""
-
-        donor_query = f"""
-        Identify the main funding organization mentioned or implied in this tender.
-        Return ONLY the donor name (e.g., 'World Bank', 'European Union', 'ADB', 'USAID', 'UNDP', 'AfDB', 'Unknown').
-        If uncertain, answer exactly 'Unknown'.
-        TENDER TEXT (excerpt):
-        {self.job_requirements[:8000]}
-        """
+        """Critical narrative evaluation with donor detection and qualitative scoring."""
         donor_match = "Unknown"
         try:
             resp = self.client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[{"role": "user", "content": donor_query}],
+                messages=[{
+                    "role": "user",
+                    "content": f"Identify the main funding organization mentioned in this tender:\n{self.job_requirements[:6000]}"
+                }],
                 temperature=0,
-                max_tokens=10,
+                max_tokens=20,
             )
             donor_match = resp.choices[0].message.content.strip()
         except Exception as e:
-            print(f"⚠️ Donor semantic detection failed, fallback triggered: {e}")
+            print(f"⚠️ Donor detection failed: {e}")
 
-        text_lower = self.job_requirements.lower()
-        donors = {
-            "World Bank": r"\\b(world\\s*bank|wbg|ifc|ida|ibrd)\\b",
-            "European Union": r"\\b(european\\s*union|eu\\s+delegation|europeaid|neighbourhood|dg\\s*intl)\\b",
-            "Asian Development Bank": r"\\b(asian\\s+development\\s+bank|adb)\\b",
-            "USAID": r"\\b(usaid|united\\s+states\\s+agency\\s+for\\s+international\\s+development)\\b",
-            "African Development Bank": r"\\b(african\\s+development\\s+bank|afdb)\\b",
-            "UNDP": r"\\b(undp|united\\s+nations\\s+development\\s+programme)\\b",
-        }
-        if donor_match == "Unknown":
-            for name, pattern in donors.items():
-                if re.search(pattern, text_lower):
-                    donor_match = name
-                    break
-        if donor_match == "Unknown":
+        if not donor_match or donor_match.lower() == "unknown":
             donor_match = "General donor context"
 
         prompt = f"""
-You are a senior evaluator assessing candidates for a tender funded by **{donor_match}**.
+You are a senior evaluator assessing a candidate CV for a tender funded by **{donor_match}**.
 
-Perform a detailed, evidence-based critical evaluation of the candidate’s CV
-against the JOB REQUIREMENTS and contextualize every criterion according to {donor_match}'s
-typical focus and terminology.
-Do not mention other donors (EU, ADB, etc.) unless explicitly stated in the tender or CV.
-Focus exclusively on {donor_match} as the donor context.
-...
+Provide a critical, evidence-based narrative analysis with:
+1. Major strengths
+2. Major weaknesses
+3. Overall fit
+4. A final score between 0.0 and 1.0 as 'FINAL SCORE: <score>'
+
+JOB REQUIREMENTS (summary):
+{self.job_requirements[:7000]}
+
+CANDIDATE CV:
+{cv_text[:8000]}
 """
+
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are an expert evaluator for international tenders."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+                max_tokens=2500,
+            )
+            report_text = response.choices[0].message.content.strip()
+
+            match = re.search(r"FINAL SCORE[:\-]?\s*([0-9]\.?[0-9]*)", report_text, re.IGNORECASE)
+            score = float(match.group(1)) if match else 0.0
+
+            return {
+                "candidate_name": filename,
+                "report": report_text,
+                "final_score": round(score, 2)
+            }
+
+        except Exception as e:
+            print(f"❌ Critical mode error for {filename}: {e}")
+            return {
+                "candidate_name": filename,
+                "report": f"⚠️ Critical narrative failed: {e}",
+                "final_score": 0.0
+            }
 
     # ------------------- JSON CLEANER -------------------
 
@@ -319,7 +346,7 @@ Focus exclusively on {donor_match} as the donor context.
         content = content.strip()
         content = re.sub(r"^```(json)?", "", content)
         content = re.sub(r"```$", "", content)
-        match = re.search(r"(\\{.*\\})", content, re.DOTALL)
+        match = re.search(r"(\{.*\})", content, re.DOTALL)
         if match:
             return match.group(1).strip()
         return content
