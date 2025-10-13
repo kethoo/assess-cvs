@@ -8,7 +8,6 @@ from docx import Document
 from models import *
 
 
-
 class CVAssessmentSystem:
     def __init__(self, api_key=None):
         self.api_key = api_key
@@ -216,11 +215,36 @@ Return as markdown with clear sections.
         return "Unclassified"
 
     # ======================================================
-    # 🪄 WRAPPER for Streamlit Compatibility
+    # 🪄 FULLY SELF-CONTAINED FOLDER PROCESSOR
     # ======================================================
     def process_cv_folder(self, cv_folder, expert_section, mode="structured"):
         """
-        Wrapper method for Streamlit. Delegates to original main.py logic.
+        Processes all CVs in a folder — no external dependencies.
         """
-        from main import process_cv_folder as main_process_cv_folder
-        return main_process_cv_folder(cv_folder, expert_section, mode)
+        if not os.path.exists(cv_folder):
+            return [{"candidate_name": "⚠️ Folder not found", "report": "", "fit_level": ""}]
+
+        results = []
+        for file_name in os.listdir(cv_folder):
+            file_path = os.path.join(cv_folder, file_name)
+            if not os.path.isfile(file_path):
+                continue
+
+            candidate_name = os.path.splitext(file_name)[0]
+            cv_text = self._extract_text_from_cv(file_path)
+
+            if mode == "critical":
+                report = self.critical_assessment(cv_text, expert_section)
+                fit = "Critical Narrative"
+            else:
+                report = self.structured_assessment(cv_text, expert_section)
+                fit = "Structured Evaluation"
+
+            score = self._extract_score_from_text(report)
+            results.append({
+                "candidate_name": candidate_name,
+                "report": report,
+                "overall_score": score,
+                "fit_level": fit,
+            })
+        return results
