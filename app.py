@@ -110,7 +110,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 f"{expert_section}"
             )
             st.success(f"✅ Extracted expert section for: {expert_name}")
-            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:4000], height=350)
+            st.text_area("📘 Preview of Extracted Expert Section", expert_section, height=350)
 
         # Assign requirements text for evaluation
         system.job_requirements = combined_text
