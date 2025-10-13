@@ -87,45 +87,53 @@ class CVAssessmentSystem:
         return "\n".join(text)
 
     def _extract_text_from_word(self, file_path: str) -> str:
-        """Extract text from Word document, preserving tables and merging broken lines."""
+        """Extract full text from a Word (.docx) file including tables and bullets, preserving order."""
         from docx import Document
+        import itertools
+    
         doc = Document(file_path)
-        lines = []
+        paragraphs = []
     
         # --- Read all paragraphs ---
-        for p in doc.paragraphs:
-            text = p.text.strip()
+        for para in doc.paragraphs:
+            text = para.text.strip()
             if text:
-                lines.append(text)
+                paragraphs.append(text)
     
-        # --- Read all tables (flattened row by row) ---
+        # --- Read all tables carefully ---
         for table in doc.tables:
             for row in table.rows:
-                row_text = " ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                # Collect text from each cell, even if multiple paragraphs
+                cell_texts = []
+                for cell in row.cells:
+                    cell_paras = [p.text.strip() for p in cell.paragraphs if p.text.strip()]
+                    if cell_paras:
+                        cell_texts.append(" ".join(cell_paras))
+                row_text = " ".join(cell_texts)
                 if row_text:
-                    lines.append(row_text)
+                    paragraphs.append(row_text)
     
-        # --- Merge lines intelligently ---
-        merged = []
+        # --- Merge small fragments and preserve punctuation ---
+        merged_lines = []
         buffer = ""
-        for line in lines:
-            # join broken lines (no punctuation and short fragments)
-            if len(line) < 100 and not line.endswith((".", ":", ";")):
+    
+        for line in paragraphs:
+            # If it's short or doesn’t end with a full stop, append to buffer
+            if len(line) < 80 and not re.search(r"[.!?;:]$", line):
                 buffer += " " + line
             else:
                 buffer += " " + line
-                merged.append(buffer.strip())
+                merged_lines.append(buffer.strip())
                 buffer = ""
         if buffer:
-            merged.append(buffer.strip())
+            merged_lines.append(buffer.strip())
     
-        # --- Clean up double spaces and broken hyphens ---
-        text = "\n".join(merged)
+        # --- Cleanup ---
+        text = "\n".join(merged_lines)
         text = re.sub(r"\s{2,}", " ", text)
         text = re.sub(r"(\w)-\s+(\w)", r"\1\2", text)
-    
         return text.strip()
-    
+
     
     
 
