@@ -19,69 +19,71 @@ class CVAssessmentSystem:
         self.assessments: List[Any] = []
         self.session_id = f"assessment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    # ------------------- 🧠 NEW HYBRID EXPERT EXTRACTION -------------------
+    # ------------------- HYBRID EXPERT EXTRACTOR -------------------
 
     def extract_expert_sections_by_bold(self, file_path: str, expert_name: str) -> str:
         """
-        Improved hybrid extractor:
-        - Starts at first match for the given expert.
-        - Collects all text belonging to the same expert (even later repeats).
-        - Stops immediately when a new expert section begins (Key Expert 2, etc.)
-          or when a strong bold heading unrelated to qualifications appears.
-        - Merges separated parts with '--------------'.
+        Final hybrid extractor:
+        - Starts at the first mention of `expert_name` (e.g. 'Key Expert 1', 'KE 1').
+        - Captures everything related to that expert (even if repeated later).
+        - Stops *immediately* when a different expert appears (e.g. 'Key Expert 2', 'KE 3'),
+          removing that entire line so it never appears.
+        - Also stops when a bold heading clearly starts a new, unrelated section.
+        - Joins multiple occurrences with '--------------'.
         """
         from docx import Document
         import re
-    
+
         try:
             doc = Document(file_path)
         except Exception as e:
             return f"⚠️ Could not read Word file: {e}"
-    
+
         sections = []
         current_section = []
         capture = False
-    
-        expert_pattern = re.compile(
-            rf"(Key\s*Expert\s*\d+|KE\s*\d+|{re.escape(expert_name)})",
-            re.IGNORECASE,
-        )
-        next_expert_pattern = re.compile(r"Key\s*Expert\s*(\d+)", re.IGNORECASE)
-    
-        # extract numeric part of target expert, e.g. "1"
+
+        # --- helper regexes ---
+        expert_pattern = re.compile(r"(Key\s*Expert\s*\d+|KE\s*\d+|{})".format(re.escape(expert_name)), re.IGNORECASE)
+        next_expert_pattern = re.compile(r"(Key\s*Expert\s*(\d+)|KE\s*(\d+))", re.IGNORECASE)
+
+        # figure out which number we're looking for (e.g. "1")
         current_expert_match = re.search(r"Key\s*Expert\s*(\d+)", expert_name, re.IGNORECASE)
         current_expert_num = current_expert_match.group(1) if current_expert_match else None
-    
+
         for para in doc.paragraphs:
             text = para.text.strip()
             if not text:
                 continue
-    
+
+            # detect short bold headings (likely section titles)
             is_bold_heading = any(run.bold for run in para.runs if run.text.strip()) and len(text.split()) < 15
-    
-            # --- start capturing when our expert appears
+
+            # --- start capturing when our expert first appears ---
             if not capture and expert_pattern.search(text):
                 capture = True
                 current_section.append(text)
                 continue
-    
+
+            # --- if capturing, check for stop conditions ---
             if capture:
-                # 1️⃣ stop when a *different* expert number appears
+                # 1️⃣ a *different* expert appears → stop immediately before it
                 new_expert_match = next_expert_pattern.search(text)
                 if new_expert_match:
-                    new_num = new_expert_match.group(1)
+                    # get numeric part of the new expert
+                    new_num = new_expert_match.group(2) or new_expert_match.group(3)
                     if not current_expert_num or new_num != current_expert_num:
-                        # hard stop: split at the new expert keyword and keep only text before it
-                        parts = re.split(r"(?=Key\\s*Expert\\s*\\d+|KE\\s*\\d+)", text, maxsplit=1, flags=re.IGNORECASE)
+                        # cut the text before 'Key Expert' or 'KE' appears
+                        parts = re.split(r"(?=Key\s*Expert\s*\d+|KE\s*\d+)", text, maxsplit=1, flags=re.IGNORECASE)
                         if parts and parts[0].strip():
                             current_section.append(parts[0].strip())
+                        # stop here
                         sections.append(" ".join(current_section).strip())
                         current_section = []
                         capture = False
                         continue
 
-    
-                # 2️⃣ stop when an unrelated bold heading appears
+                # 2️⃣ strong unrelated bold heading
                 if is_bold_heading and not expert_pattern.search(text):
                     if not re.search(
                         r"Qualification|General|Specific|Experience|Education|Skill|Language",
@@ -92,18 +94,18 @@ class CVAssessmentSystem:
                         current_section = []
                         capture = False
                         continue
-    
-                # otherwise, keep adding
+
+                # otherwise keep collecting
                 current_section.append(text)
-    
-        # finalize any remaining text
+
+        # finish any remaining collected text
         if current_section:
             sections.append(" ".join(current_section).strip())
-    
+
         if not sections:
             return "⚠️ No expert sections detected using hybrid bold/expert logic."
-    
-        # merge and clean
+
+        # join and clean
         joined = "\n\n--------------\n\n".join(sections)
         joined = re.sub(r"\s{2,}", " ", joined)
         return joined.strip()
@@ -290,58 +292,6 @@ CANDIDATE CV:
                 assessed_at=datetime.now().isoformat(),
             )
 
-    # ------------------- CRITICAL + TAILORING MODE -------------------
-
-    def _assess_candidate_critical(self, filename: str, cv_text: str) -> Dict[str, Any]:
-        """Critical narrative evaluation with semantic donor detection, regex fallback, and dynamic donor context."""
-
-        donor_query = f"""
-        Identify the main funding organization mentioned or implied in this tender.
-        Return ONLY the donor name (e.g., 'World Bank', 'European Union', 'ADB', 'USAID', 'UNDP', 'AfDB', 'Unknown').
-        If uncertain, answer exactly 'Unknown'.
-        TENDER TEXT (excerpt):
-        {self.job_requirements[:8000]}
-        """
-        donor_match = "Unknown"
-        try:
-            resp = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": donor_query}],
-                temperature=0,
-                max_tokens=10,
-            )
-            donor_match = resp.choices[0].message.content.strip()
-        except Exception as e:
-            print(f"⚠️ Donor semantic detection failed, fallback triggered: {e}")
-
-        text_lower = self.job_requirements.lower()
-        donors = {
-            "World Bank": r"\\b(world\\s*bank|wbg|ifc|ida|ibrd)\\b",
-            "European Union": r"\\b(european\\s*union|eu\\s+delegation|europeaid|neighbourhood|dg\\s*intl)\\b",
-            "Asian Development Bank": r"\\b(asian\\s+development\\s+bank|adb)\\b",
-            "USAID": r"\\b(usaid|united\\s+states\\s+agency\\s+for\\s+international\\s+development)\\b",
-            "African Development Bank": r"\\b(african\\s+development\\s+bank|afdb)\\b",
-            "UNDP": r"\\b(undp|united\\s+nations\\s+development\\s+programme)\\b",
-        }
-        if donor_match == "Unknown":
-            for name, pattern in donors.items():
-                if re.search(pattern, text_lower):
-                    donor_match = name
-                    break
-        if donor_match == "Unknown":
-            donor_match = "General donor context"
-
-        prompt = f"""
-You are a senior evaluator assessing candidates for a tender funded by **{donor_match}**.
-
-Perform a detailed, evidence-based critical evaluation of the candidate’s CV
-against the JOB REQUIREMENTS and contextualize every criterion according to {donor_match}'s
-typical focus and terminology.
-Do not mention other donors (EU, ADB, etc.) unless explicitly stated in the tender or CV.
-Focus exclusively on {donor_match} as the donor context.
-...
-"""
-
     # ------------------- JSON CLEANER -------------------
 
     def _clean_json(self, content: str) -> str:
@@ -349,7 +299,7 @@ Focus exclusively on {donor_match} as the donor context.
         content = content.strip()
         content = re.sub(r"^```(json)?", "", content)
         content = re.sub(r"```$", "", content)
-        match = re.search(r"(\\{.*\\})", content, re.DOTALL)
+        match = re.search(r"(\{.*\})", content, re.DOTALL)
         if match:
             return match.group(1).strip()
         return content
