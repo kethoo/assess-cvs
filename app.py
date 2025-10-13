@@ -1,5 +1,5 @@
 import streamlit as st
-from cv_assessment_modified import CVAssessmentSystem
+from cv_assessment import CVAssessmentSystem
 import tempfile
 import os
 import re
