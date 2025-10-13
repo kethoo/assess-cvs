@@ -30,6 +30,11 @@ if req_file:
     tender_text = system_temp.load_job_requirements(tender_path)
     st.info("📘 Tender text loaded successfully.")
 
+    # --- 🔍 DEBUG: Inspect end of tender text ---
+    st.write(f"Tender text length: {len(tender_text)} characters")
+    if st.checkbox("Show tail of tender (last 1000 chars)"):
+        st.text(tender_text[-1000:])
+
 # --- Expert Name Input ---
 st.markdown("### 🎯 Enter the EXACT Expert Role Title (as in the tender)")
 expert_name = st.text_input(
