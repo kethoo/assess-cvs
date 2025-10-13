@@ -19,6 +19,65 @@ class CVAssessmentSystem:
         self.assessments: List[Any] = []
         self.session_id = f"assessment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
+    # ------------------- 🧠 NEW HYBRID EXPERT EXTRACTION -------------------
+
+    def extract_expert_sections_by_bold(self, file_path: str, expert_name: str) -> str:
+        """
+        Extracts expert sections using both bold text markers and expert numbering logic.
+        Starts from the expert_name match and continues until another expert section or bold heading appears.
+        Joins multiple found sections with '--------------'.
+        """
+        from docx import Document
+
+        try:
+            doc = Document(file_path)
+        except Exception as e:
+            return f"⚠️ Could not read Word file: {e}"
+
+        sections = []
+        current_section = []
+        capture = False
+        expert_pattern = re.compile(
+            rf"(Key\s*Expert\s*\d+|KE\s*\d+|{re.escape(expert_name)})",
+            re.IGNORECASE
+        )
+
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if not text:
+                continue
+
+            # Detect bold headings (potential new expert section)
+            is_bold_heading = any(run.bold for run in para.runs if run.text.strip()) and len(text.split()) < 12
+
+            # Start capturing when the expert title matches
+            if expert_pattern.search(text):
+                if capture and current_section:
+                    sections.append(" ".join(current_section).strip())
+                    current_section = []
+                capture = True
+
+            # Stop when we hit a new expert or a new bold heading
+            elif capture and (re.search(r"Key\s*Expert\s*\d+", text, re.IGNORECASE) or is_bold_heading):
+                sections.append(" ".join(current_section).strip())
+                current_section = []
+                capture = False
+
+            if capture:
+                current_section.append(text)
+
+        # Add last captured section
+        if current_section:
+            sections.append(" ".join(current_section).strip())
+
+        if not sections:
+            return "⚠️ No expert sections detected using bold-based logic."
+
+        # Join multiple sections cleanly
+        joined = "\n\n--------------\n\n".join(sections)
+        joined = re.sub(r"\s{2,}", " ", joined)
+        return joined.strip()
+
     # ------------------- LOAD JOB REQUIREMENTS -------------------
 
     def load_job_requirements(self, file_path: str) -> str:
@@ -87,58 +146,41 @@ class CVAssessmentSystem:
         return "\n".join(text)
 
     def _extract_text_from_word(self, file_path: str) -> str:
-        """Extract full text from a Word (.docx) file including tables, text boxes, and nested items."""
+        """Extract text from Word document, preserving tables and merging broken lines."""
         from docx import Document
-        from docx.oxml.table import CT_Tbl
-        from docx.oxml.text.paragraph import CT_P
-        import itertools
-    
         doc = Document(file_path)
-    
-        def iter_block_items(parent):
-            """Yield paragraphs and tables in document order (recursively for nested tables)."""
-            for child in parent.element.body.iterchildren():
-                if isinstance(child, CT_P):
-                    yield parent.paragraphs[len(list(itertools.takewhile(lambda p: p._p is not child, parent.paragraphs)))]
-                elif isinstance(child, CT_Tbl):
-                    yield parent.tables[len(list(itertools.takewhile(lambda t: t._tbl is not child, parent.tables)))]
-    
-        def get_text_from_cell(cell):
-            parts = []
-            for paragraph in cell.paragraphs:
-                if paragraph.text.strip():
-                    parts.append(paragraph.text.strip())
-            for table in cell.tables:
-                parts.append(get_text_from_table(table))
-            return " ".join(parts)
-    
-        def get_text_from_table(table):
-            rows_text = []
+        lines = []
+
+        # --- Read all paragraphs ---
+        for p in doc.paragraphs:
+            text = p.text.strip()
+            if text:
+                lines.append(text)
+
+        # --- Read all tables (flattened row by row) ---
+        for table in doc.tables:
             for row in table.rows:
-                row_text = " ".join(get_text_from_cell(c) for c in row.cells if c.text.strip())
+                row_text = " ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
                 if row_text:
-                    rows_text.append(row_text)
-            return " ".join(rows_text)
-    
-        text_blocks = []
-        for block in iter_block_items(doc):
-            if isinstance(block, type(doc.paragraphs[0])):
-                if block.text.strip():
-                    text_blocks.append(block.text.strip())
-            elif isinstance(block, type(doc.tables[0])):
-                table_text = get_text_from_table(block)
-                if table_text:
-                    text_blocks.append(table_text)
-    
-        # Clean and merge
-        text = " ".join(text_blocks)
+                    lines.append(row_text)
+
+        # --- Merge lines intelligently ---
+        merged = []
+        buffer = ""
+        for line in lines:
+            if len(line) < 100 and not line.endswith((".", ":", ";")):
+                buffer += " " + line
+            else:
+                buffer += " " + line
+                merged.append(buffer.strip())
+                buffer = ""
+        if buffer:
+            merged.append(buffer.strip())
+
+        text = "\n".join(merged)
         text = re.sub(r"\s{2,}", " ", text)
         text = re.sub(r"(\w)-\s+(\w)", r"\1\2", text)
         return text.strip()
-    
-        
-        
-
 
     # ------------------- STRUCTURED (DASHBOARD) MODE -------------------
 
@@ -223,7 +265,6 @@ CANDIDATE CV:
     def _assess_candidate_critical(self, filename: str, cv_text: str) -> Dict[str, Any]:
         """Critical narrative evaluation with semantic donor detection, regex fallback, and dynamic donor context."""
 
-        # ---------- 1️⃣ Semantic donor detection ----------
         donor_query = f"""
         Identify the main funding organization mentioned or implied in this tender.
         Return ONLY the donor name (e.g., 'World Bank', 'European Union', 'ADB', 'USAID', 'UNDP', 'AfDB', 'Unknown').
@@ -243,15 +284,14 @@ CANDIDATE CV:
         except Exception as e:
             print(f"⚠️ Donor semantic detection failed, fallback triggered: {e}")
 
-        # ---------- 2️⃣ Regex fallback ----------
         text_lower = self.job_requirements.lower()
         donors = {
-            "World Bank": r"\b(world\s*bank|wbg|ifc|ida|ibrd)\b",
-            "European Union": r"\b(european\s*union|eu\s+delegation|europeaid|neighbourhood|dg\s*intl)\b",
-            "Asian Development Bank": r"\b(asian\s+development\s+bank|adb)\b",
-            "USAID": r"\b(usaid|united\s+states\s+agency\s+for\s+international\s+development)\b",
-            "African Development Bank": r"\b(african\s+development\s+bank|afdb)\b",
-            "UNDP": r"\b(undp|united\s+nations\s+development\s+programme)\b",
+            "World Bank": r"\\b(world\\s*bank|wbg|ifc|ida|ibrd)\\b",
+            "European Union": r"\\b(european\\s*union|eu\\s+delegation|europeaid|neighbourhood|dg\\s*intl)\\b",
+            "Asian Development Bank": r"\\b(asian\\s+development\\s+bank|adb)\\b",
+            "USAID": r"\\b(usaid|united\\s+states\\s+agency\\s+for\\s+international\\s+development)\\b",
+            "African Development Bank": r"\\b(african\\s+development\\s+bank|afdb)\\b",
+            "UNDP": r"\\b(undp|united\\s+nations\\s+development\\s+programme)\\b",
         }
         if donor_match == "Unknown":
             for name, pattern in donors.items():
@@ -261,7 +301,6 @@ CANDIDATE CV:
         if donor_match == "Unknown":
             donor_match = "General donor context"
 
-        # ---------- 3️⃣ Build the prompt ----------
         prompt = f"""
 You are a senior evaluator assessing candidates for a tender funded by **{donor_match}**.
 
@@ -270,104 +309,8 @@ against the JOB REQUIREMENTS and contextualize every criterion according to {don
 typical focus and terminology.
 Do not mention other donors (EU, ADB, etc.) unless explicitly stated in the tender or CV.
 Focus exclusively on {donor_match} as the donor context.
-
----
-
-### REQUIRED OUTPUT STRUCTURE (Markdown)
-
-#### 🧭 Critical Evaluation – {filename}
-
-**Evaluation Table**
-
-| Section | Criteria | Score (0–1) | Confidence | Evaluator Commentary |
-|----------|-----------|-------------|-------------|----------------------|
-| **General Tender Context (20% weight)** | Understanding of project/tender context |  |  |  |
-|  | Familiarity with region/country context |  |  |  |
-| **Specific Expert Requirements (80% weight)** | Team leadership and management |  |  |  |
-|  | Relevant domain expertise |  |  |  |
-|  | Technical or regulatory knowledge |  |  |  |
-|  | Donor project experience ({donor_match}) |  |  |  |
-|  | Communication and coordination skills |  |  |  |
-|  | Educational background |  |  |  |
-|  | Analytical and reporting skills |  |  |  |
-|  | Language proficiency |  |  |  |
-
-Each cell must contain a numeric score (0–1), confidence (High/Medium/Low), and concise commentary (1–3 sentences).
-
-After the table, show:
-**Final Weighted Score (80% expert, 20% context): X.XX / 1.00**
-
----
-
-**📊 Critical Summary**
-Summarize alignment with {donor_match} project style and focus.
-
-**📉 Evaluator Summary**
-List 3–5 key takeaways (strengths, weaknesses, donor-fit).
-
-**📌 Strengths & Weaknesses**
-Provide at least 3 evidence-based strengths and 3 weaknesses.
-
-**✂️ Tailoring Suggestions (How to Strengthen CV for This Role)**
-
-**a. Rewriting & Emphasis Suggestions**
-Suggest concrete text-level improvements to highlight donor-specific relevance.
-
-**b. 🪶 Word Recommendations (Tender Keyword Alignment)**
-Provide 5–10 recommended keyword alignments using {donor_match} phrasing.
-
-| Current CV Wording | Recommended {donor_match} Keyword | Why |
-|--------------------|----------------------------------|-----|
-| "Project manager" | "Implementation support consultant under {donor_match} framework" | Aligns with {donor_match} terminology. |
-| "Drafted reports" | "Prepared deliverables per {donor_match} quality control protocols" | Matches donor QA phrasing. |
-| "Policy development" | "Institutional reform and capacity-building support" | Fits {donor_match} operational tone. |
-
----
-
-### CONTEXT INPUTS
-
-**Tender Context (20%)**
-{self.job_requirements[:4000]}
-
-**Candidate CV**
-{cv_text[:9000]}
+...
 """
-
-        # ---------- 4️⃣ Call GPT ----------
-        try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a senior evaluator for international tenders. "
-                            "Produce a full markdown report with scores, commentary, and rewording recommendations. "
-                            "Always include the evaluation table and numeric final score."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.15,
-                max_tokens=8500,
-            )
-
-            report_text = response.choices[0].message.content.strip()
-            match = re.search(r"Final Weighted Score.*?([0-9]\.[0-9]+)", report_text)
-            final_score = float(match.group(1)) if match else 0.0
-
-            return {
-                "candidate_name": filename,
-                "report": f"**Detected Donor Context:** {donor_match}\n\n" + report_text,
-                "final_score": final_score,
-            }
-
-        except Exception as e:
-            return {
-                "candidate_name": filename,
-                "report": f"❌ Error generating critical evaluation: {e}",
-                "final_score": 0.0,
-            }
 
     # ------------------- JSON CLEANER -------------------
 
@@ -376,7 +319,7 @@ Provide 5–10 recommended keyword alignments using {donor_match} phrasing.
         content = content.strip()
         content = re.sub(r"^```(json)?", "", content)
         content = re.sub(r"```$", "", content)
-        match = re.search(r"(\{.*\})", content, re.DOTALL)
+        match = re.search(r"(\\{.*\\})", content, re.DOTALL)
         if match:
             return match.group(1).strip()
         return content
