@@ -2,7 +2,7 @@ import streamlit as st
 import tempfile
 import os
 from cv_assessment import CVAssessmentSystem
-from main import process_cv_folder
+
 
 st.set_page_config(page_title="CV Assessor", layout="wide")
 st.title("📄 CV Assessment Tool")
@@ -87,6 +87,7 @@ if st.button("🚀 Run Assessment"):
     else:
         with st.spinner("⏳ Processing CVs — please wait..."):
             try:
+                from main import process_cv_folder
                 results = system.process_cv_folder(
                     uploaded_cv_folder,
                     st.session_state.expert_section,
