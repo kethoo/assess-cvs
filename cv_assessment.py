@@ -6,7 +6,7 @@ import time
 from openai import OpenAI
 from docx import Document
 from models import *
-from main import process_cv_folder as main_process_cv_folder
+
 
 
 class CVAssessmentSystem:
@@ -222,4 +222,5 @@ Return as markdown with clear sections.
         """
         Wrapper method for Streamlit. Delegates to original main.py logic.
         """
+        from main import process_cv_folder as main_process_cv_folder
         return main_process_cv_folder(cv_folder, expert_section, mode)
