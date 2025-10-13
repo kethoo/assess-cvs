@@ -7,6 +7,10 @@ from cv_assessment import CVAssessmentSystem
 st.set_page_config(page_title="CV Assessor", layout="wide")
 st.title("📄 CV Assessment Tool")
 
+# --- Initialize session state ---
+if "expert_section" not in st.session_state:
+    st.session_state.expert_section = ""
+
 # --- API key input ---
 api_key = st.text_input("🔑 Enter your OpenAI API Key", type="password")
 system = CVAssessmentSystem(api_key=api_key)
@@ -17,7 +21,7 @@ st.markdown("---")
 st.header("1️⃣ Upload Tender File")
 tender_file = st.file_uploader("Upload the Tender Document (.docx or .pdf)", type=["docx", "pdf", "txt"])
 
-expert_section = ""
+tender_path = None
 tender_text = ""
 
 if tender_file:
@@ -43,16 +47,24 @@ expert_name = st.text_input("Enter Expert Role (e.g., 'Key Expert 1', 'KE1', or 
 if tender_file and expert_name:
     if st.button("📘 Extract Expert Section"):
         if tender_file.name.lower().endswith(".docx"):
-            expert_section = system.extract_expert_sections_by_bold(tender_path, expert_name)
+            extracted = system.extract_expert_sections_by_bold(tender_path, expert_name)
         else:
-            expert_section = system.load_job_requirements(tender_path)
+            extracted = system.load_job_requirements(tender_path)  # fallback
 
-        if expert_section.strip():
+        if extracted.strip():
+            st.session_state.expert_section = extracted
             st.success("✅ Expert section(s) extracted successfully!")
-            st.subheader("📘 Preview of Extracted Expert Section:")
-            expert_section = st.text_area("You can edit the extracted text below before assessment:", value=expert_section, height=400)
         else:
             st.warning("⚠️ Could not locate that expert section. Try 'KE1' or 'Key Expert 1' etc.")
+
+# --- Expert section preview and editing ---
+if st.session_state.expert_section.strip():
+    st.subheader("📘 Preview of Extracted Expert Section:")
+    st.session_state.expert_section = st.text_area(
+        "You can edit the extracted text below before assessment:",
+        value=st.session_state.expert_section,
+        height=400,
+    )
 
 st.markdown("---")
 
@@ -86,14 +98,14 @@ st.markdown("---")
 if st.button("🚀 Run Assessment"):
     if not cv_files:
         st.error("⚠️ Please upload at least one CV file before running the assessment.")
-    elif not expert_section.strip():
+    elif not st.session_state.expert_section.strip():
         st.error("⚠️ Please extract or provide an Expert Section before running the assessment.")
     else:
         with st.spinner("⏳ Processing CVs — please wait..."):
             try:
                 results = system.process_cv_folder(
                     uploaded_cv_folder,
-                    expert_section,
+                    st.session_state.expert_section,
                     mode="critical" if mode == "Critical Narrative" else "structured"
                 )
 
