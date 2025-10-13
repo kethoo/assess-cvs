@@ -4,16 +4,21 @@ import tempfile
 import os
 import re
 
+# ------------------- STREAMLIT CONFIG -------------------
+
 st.set_page_config(page_title="Deep CV Assessment System", layout="wide")
 st.title("📄 Deep CV Assessment System")
 
-# --- API Key Input ---
+# ------------------- API KEY -------------------
+
 api_key = st.text_input("🔑 Enter OpenAI API Key", type="password")
 
-# --- Mode Selection ---
+# ------------------- MODE SELECTION -------------------
+
 mode = st.radio("Select Evaluation Mode:", ["Structured (Dashboard)", "Critical Narrative"])
 
-# --- Upload Tender ---
+# ------------------- UPLOAD TENDER -------------------
+
 req_file = st.file_uploader("📄 Upload Tender / Job Description", type=["pdf", "docx", "doc"])
 tender_text = ""
 
@@ -30,92 +35,56 @@ if req_file:
     tender_text = system_temp.load_job_requirements(tender_path)
     st.info("📘 Tender text loaded successfully.")
 
-    # Optional debug (to inspect raw tender end)
-    st.write(f"Tender text length: {len(tender_text)} characters")
-    if st.checkbox("Show tail of tender (last 1000 chars)"):
-        st.text(tender_text[-1000:])
+# ------------------- EXPERT NAME -------------------
 
-# --- Expert Name Input ---
-st.markdown("### 🎯 Enter the EXACT Expert Role Title (as in the tender)")
+st.markdown("### 🎯 Enter the Expert Role Title (exactly as in the tender file)")
 expert_name = st.text_input(
-    "Example: Key expert 1",
-    placeholder="Enter the exact expert heading (case-insensitive)"
+    "Example: Team Leader, International Expert",
+    placeholder="Enter the expert role title or partial match (e.g., 'Key Expert 1', 'Procurement Expert')"
 )
 
-# --- Expert Section Extraction ---
+# ------------------- REGEX-BASED EXTRACTION FUNCTION -------------------
+
 def extract_expert_section(full_text: str, expert_name: str) -> str:
     """
-    Extract all 'Key Expert N' sections:
-    - Starts at each occurrence of the given expert name.
-    - Ends right before the next higher-numbered expert (Key Expert N+1).
-    - Joins all found blocks with a separator '---------------'.
+    Extracts the full text for a specific expert, including both table and paragraph content.
+    Handles multiple formatting styles using regex.
     """
     if not full_text or not expert_name:
         return ""
 
-    text = re.sub(r"\s+", " ", full_text)
-
-    # Identify which expert number to extract (default 1)
-    num_match = re.search(r"\bKey\s*Expert\s*(\d+)\b", expert_name, re.IGNORECASE)
-    current_num = int(num_match.group(1)) if num_match else 1
-    next_num = current_num + 1
-
-    # Find all starting points
-    pattern_start = re.compile(re.escape(expert_name), re.IGNORECASE)
-    starts = [m.start() for m in pattern_start.finditer(text)]
-    if not starts:
-        return ""
-
-    # Define stop pattern (next expert)
-    stop_pattern = re.compile(
-        rf"(?:(?<!\d)(?:Key|KE)?\s*Expert\s*{next_num}\b)",
-        re.IGNORECASE,
+    # Stops at next expert, annex, or general section
+    pattern = re.compile(
+        rf"({re.escape(expert_name)}.*?)(?=(?:Key\s*Expert\s*\d|KE\s*\d|Expert\s+in|Non[-\s]*Key|Annex|General\s+Conditions|Terms|END|$))",
+        re.IGNORECASE | re.DOTALL,
     )
 
-    sections = []
-    for s in starts:
-        stop_match = stop_pattern.search(text, s)
-        end_index = stop_match.start() if stop_match else len(text)
-        block = text[s:end_index].strip()
-        if block:
-            sections.append(block)
+    match = pattern.search(full_text)
+    if match:
+        section = match.group(1)
+        # Clean spacing
+        section = re.sub(r"\n{2,}", "\n", section)
+        section = re.sub(r"\s{2,}", " ", section)
+        return section.strip()
 
-    return "\n\n---------------\n\n".join(sections)
+    return ""
 
+# ------------------- UPLOAD CVS -------------------
 
-# --- Upload CVs ---
 cv_files = st.file_uploader(
     "👤 Upload Candidate CVs",
     type=["pdf", "docx", "doc"],
     accept_multiple_files=True
 )
 
-# --- Step 1: Extract and Show Editable Preview ---
-edited_expert_section = ""
-if st.button("📘 Extract Expert Section") and req_file and expert_name.strip():
-    expert_section = extract_expert_section(tender_text, expert_name)
-    if not expert_section:
-        st.warning("⚠️ Could not locate that expert section.")
-    else:
-        st.success(f"✅ Extracted expert section(s) for: {expert_name}")
-        edited_expert_section = st.text_area(
-            "✏️ Preview & Edit Extracted Expert Section (you can modify text before running assessment):",
-            expert_section,
-            height=700,
-        )
+# ------------------- RUN ASSESSMENT -------------------
 
-# --- Step 2: Run Assessment on Edited Section ---
-if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os.getenv("OPENAI_API_KEY")):
-    # If user has edited the section, keep it; otherwise extract fresh
-    if not edited_expert_section:
-        expert_section = extract_expert_section(tender_text, expert_name)
-    else:
-        expert_section = edited_expert_section
-
+if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.strip() and (api_key or os.getenv("OPENAI_API_KEY")):
     with tempfile.TemporaryDirectory() as tmpdir:
         cv_folder = os.path.join(tmpdir, "cvs")
         os.makedirs(cv_folder, exist_ok=True)
 
+        # Save uploaded CVs
         for file in cv_files:
             path = os.path.join(cv_folder, file.name)
             with open(path, "wb") as f:
@@ -126,8 +95,19 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
         # Initialize system
         system = CVAssessmentSystem(api_key=api_key or None)
 
-        # Combine tender and edited expert text
+        # ------------------- PRIMARY EXTRACTION (REGEX) -------------------
+        expert_section = extract_expert_section(tender_text, expert_name)
+
+        # ------------------- FALLBACK: BOLD-BASED LOGIC -------------------
+        if not expert_section and req_file.name.lower().endswith(".docx"):
+            bold_extraction = system.extract_expert_sections_by_bold(tender_path, expert_name)
+            if bold_extraction and not bold_extraction.startswith("⚠️"):
+                expert_section = bold_extraction
+                st.info("🟨 Expert section extracted using bold-based logic (fallback mode).")
+
+        # ------------------- IF STILL NOTHING FOUND -------------------
         if not expert_section:
+            st.warning("⚠️ Could not precisely locate that expert section. The full tender will be used as fallback context.")
             combined_text = tender_text
         else:
             combined_text = (
@@ -136,10 +116,12 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
                 f"--- SPECIFIC EXPERT REQUIREMENTS (80% weight) ---\n\n"
                 f"{expert_section}"
             )
+            st.success(f"✅ Extracted expert section for: {expert_name}")
+            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:2500], height=250)
+
+        # ------------------- RUN ASSESSMENTS -------------------
 
         system.job_requirements = combined_text
-
-        # Process CVs
         results = system.process_cv_folder(
             cv_folder,
             mode="critical" if mode == "Critical Narrative" else "structured"
@@ -147,21 +129,32 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
 
         st.success(f"✅ Processed {len(results)} candidate(s)")
 
-        # ---------- STRUCTURED MODE ----------
+        # ------------------- STRUCTURED (DASHBOARD) MODE -------------------
+
         if mode == "Structured (Dashboard)":
             ranked = sorted(results, key=lambda x: x.overall_score, reverse=True)
             st.markdown("## 🏆 Candidate Ranking (Based on Structured Scores)")
             st.table([
-                {"Rank": i + 1, "Candidate": r.candidate_name, "Score": r.overall_score, "Fit Level": r.fit_level}
+                {
+                    "Rank": i + 1,
+                    "Candidate": r.candidate_name,
+                    "Score": r.overall_score,
+                    "Fit Level": r.fit_level
+                }
                 for i, r in enumerate(ranked)
             ])
 
-        # ---------- CRITICAL NARRATIVE MODE ----------
+        # ------------------- CRITICAL (NARRATIVE) MODE -------------------
+
         else:
             ranked = sorted(results, key=lambda x: x.get("final_score", 0), reverse=True)
             st.markdown("## 🏆 Candidate Ranking (Based on Final Scores)")
             st.table([
-                {"Rank": i + 1, "Candidate": r["candidate_name"], "Final Score": f"{r['final_score']:.2f}"}
+                {
+                    "Rank": i + 1,
+                    "Candidate": r["candidate_name"],
+                    "Final Score": f"{r['final_score']:.2f}"
+                }
                 for i, r in enumerate(ranked)
             ])
 
@@ -175,7 +168,15 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
                             st.markdown("✂️ Tailoring Suggestions" + tailoring)
                     else:
                         st.markdown(report)
+
                     st.markdown(f"**🧮 Final Score:** {r['final_score']:.2f} / 1.00")
+
+# ------------------- SAFEGUARDS -------------------
+
 else:
     if not expert_name.strip():
         st.warning("⚠️ Please enter the expert role title before running the assessment.")
+    elif not req_file:
+        st.warning("⚠️ Please upload a tender or job description first.")
+    elif not cv_files:
+        st.warning("⚠️ Please upload at least one candidate CV before running the assessment.")
