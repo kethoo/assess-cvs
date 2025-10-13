@@ -12,10 +12,8 @@ st.title("📄 Deep CV Assessment System")
 
 # ------------------- SESSION STATE INITIALIZATION (MUST BE FIRST) -------------------
 
-if 'extracted_section' not in st.session_state:
-    st.session_state.extracted_section = ""
-if 'section_extracted' not in st.session_state:
-    st.session_state.section_extracted = False
+if 'expert_section_text' not in st.session_state:
+    st.session_state.expert_section_text = ""
 
 # ------------------- API KEY -------------------
 
@@ -170,28 +168,18 @@ def extract_from_text(full_text: str, expert_name: str) -> str:
 extract_button = st.button("🔍 Extract Expert Section", disabled=not (req_file and expert_name.strip() and tender_path))
 
 if extract_button:
-    with st.spinner("Extracting..."):
-        st.write(f"Debug: Looking for '{expert_name}'")
-        
+    with st.spinner("Extracting..."):        
         if req_file.name.lower().endswith('.docx'):
             expert_section = extract_expert_section(tender_path, expert_name)
         else:
             expert_section = extract_from_text(tender_text, expert_name)
         
-        st.write(f"Debug: Extracted {len(expert_section)} characters")
-        
         if expert_section:
-            st.session_state.extracted_section = expert_section
-            st.session_state.section_extracted = True
+            st.session_state.expert_section_text = expert_section
             st.success(f"✅ Extracted {len(expert_section)} characters for: {expert_name}")
-            # Force rerun to update text area
-            try:
-                st.rerun()
-            except AttributeError:
-                st.experimental_rerun()
+            st.info("Scroll down to see the extracted content in the text area below ⬇️")
         else:
-            st.session_state.extracted_section = ""
-            st.session_state.section_extracted = False
+            st.session_state.expert_section_text = ""
             st.warning("⚠️ Nothing found. Try different spelling or paste manually below.")
 
 # ------------------- EDITABLE PREVIEW -------------------
@@ -199,24 +187,25 @@ if extract_button:
 if req_file and expert_name.strip():
     st.markdown("### 📝 Expert Section Preview & Edit")
     
-    # Force text area to show current session state value
-    current_value = st.session_state.extracted_section
+    # Debug: Show what's in session state
+    if st.session_state.expert_section_text:
+        st.write(f"🔍 Debug: Session state has {len(st.session_state.expert_section_text)} characters")
     
     edited_section = st.text_area(
         "Expert Section Content (editable)",
-        value=current_value,
+        value=st.session_state.expert_section_text,
         height=400,
-        help="Edit as needed. This will be used with 80% weight.",
-        key="expert_section_editor"
+        help="Edit as needed. This will be used with 80% weight."
     )
     
-    # Only update if user actually edited (different from current)
-    if edited_section != current_value:
-        st.session_state.extracted_section = edited_section
+    # Update session state if user edits
+    st.session_state.expert_section_text = edited_section
     
-    if current_value:
-        separator_count = current_value.count('----------------------------------------------------------')
-        st.info(f"📊 {len(current_value)} chars | {separator_count + 1} subsections")
+    if st.session_state.expert_section_text:
+        separator_count = st.session_state.expert_section_text.count('----------------------------------------------------------')
+        st.info(f"📊 {len(st.session_state.expert_section_text)} chars | {separator_count + 1} subsections")
+    else:
+        st.info("👆 Click 'Extract Expert Section' button above to automatically extract, or paste content manually here")
 
 # ------------------- UPLOAD CVS -------------------
 
@@ -241,7 +230,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
         st.info("⏳ Processing CVs...")
 
         system = CVAssessmentSystem(api_key=api_key or None)
-        expert_section = st.session_state.extracted_section
+        expert_section = st.session_state.expert_section_text
 
         if not expert_section:
             st.warning("⚠️ No expert section. Using full tender.")
