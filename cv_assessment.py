@@ -1,259 +1,382 @@
 import os
+import json
 import re
-import mammoth
-from openai import OpenAI
+from pathlib import Path
+from datetime import datetime
+from typing import List, Dict, Any
 from docx import Document
-from models import *
+import PyPDF2
+import openai
+
+from models import CandidateAssessment
 
 
 class CVAssessmentSystem:
-    def __init__(self, api_key=None):
-        self.api_key = api_key
-        self.client = OpenAI(api_key=api_key) if api_key else None
-        self.job_requirements = None
-        self.model_temperature = 0.3
+    def __init__(self, api_key: str = None):
+        """Initialize the CV assessment system"""
+        self.client = openai.OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        self.job_requirements = ""
+        self.assessments: List[Any] = []
+        self.session_id = f"assessment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-    # ======================================================
-    # 🧩 NEW FLEXIBLE EXTRACTION METHOD (Bold + KE-aware)
-    # ======================================================
-    def extract_expert_sections_by_bold(self, docx_path, target_expert_name):
-        """
-        Extracts all occurrences of a given expert section (e.g. 'Key Expert 2' or 'KE2')
-        and separates each block with ---------------.
-        Case-insensitive, tolerant of spacing or abbreviation (Key Expert 1 == KE1).
-        """
+    # ------------------- LOAD JOB REQUIREMENTS -------------------
+
+    def load_job_requirements(self, file_path: str) -> str:
+        """Load tender or job requirements from Word or PDF file (auto-detects type)."""
+        with open(file_path, "rb") as f:
+            header = f.read(4)
         try:
-            doc = Document(docx_path)
-        except Exception as e:
-            return f"⚠️ Could not open document: {e}"
-
-        text = " ".join(p.text.strip() for p in doc.paragraphs if p.text.strip())
-        text = " ".join(text.split())
-
-        # Normalize expert name
-        target_expert_name = (
-            target_expert_name.lower()
-            .replace("(", "")
-            .replace(")", "")
-            .strip()
-        )
-
-        # Extract expert number (1,2,3...)
-        num_match = re.search(r"(?:key\s*expert\s*|ke\s*)(\d+)", target_expert_name, re.IGNORECASE)
-        current_num = int(num_match.group(1)) if num_match else 1
-        next_num = current_num + 1
-
-        # Regex to find each expert section
-        pattern = re.compile(
-            rf"(?i)((?:Key\s*Expert\s*{current_num}\b|KE\s*{current_num}\b).*?)"
-            rf"(?=(?:Key\s*Expert\s*(?:{next_num}|[1-9]\d*)\b|KE\s*(?:{next_num}|[1-9]\d*)\b|$))"
-        )
-        matches = pattern.findall(text)
-        if not matches:
-            matches = re.findall(
-                rf"(?i)(?:Key\s*Expert\s*{current_num}\b|KE\s*{current_num}\b).*?(?=(?:Key\s*Expert|KE|$))",
-                text,
-            )
-
-        clean_sections = [m.strip() for m in matches if len(m.strip()) > 30]
-        if not clean_sections:
-            return ""
-
-        return "\n\n---------------\n\n".join(clean_sections)
-
-    # ======================================================
-    # 📄 JOB REQUIREMENT LOADER
-    # ======================================================
-    def load_job_requirements(self, file_path):
-        ext = os.path.splitext(file_path)[1].lower()
-        try:
-            if ext == ".docx":
-                with open(file_path, "rb") as f:
-                    result = mammoth.extract_raw_text(f)
-                return result.value
-            elif ext == ".pdf":
-                from PyPDF2 import PdfReader
-                reader = PdfReader(file_path)
-                return "".join([page.extract_text() or "" for page in reader.pages])
+            if header.startswith(b"%PDF"):
+                text = self._extract_text_from_pdf(file_path)
             else:
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    return f.read()
+                text = self._extract_text_from_word(file_path)
         except Exception as e:
-            return f"⚠️ Error loading file: {e}"
+            raise ValueError(f"Cannot read file {file_path}: {e}")
 
-    # ======================================================
-    # 📜 CV TEXT EXTRACTION
-    # ======================================================
-    def _extract_text_from_cv(self, path):
-        ext = os.path.splitext(path)[1].lower()
-        if ext == ".docx":
-            with open(path, "rb") as f:
-                return mammoth.extract_raw_text(f).value
-        elif ext == ".pdf":
-            from PyPDF2 import PdfReader
-            reader = PdfReader(path)
-            return "".join([p.extract_text() or "" for p in reader.pages])
-        else:
-            with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                return f.read()
+        self.job_requirements = text
+        print(f"✅ Loaded job requirements from: {file_path}")
+        return text
 
-    # ======================================================
-    # 🧮 STRUCTURED ASSESSMENT (80/20 WEIGHTING)
-    # ======================================================
-    def structured_assessment(self, cv_text, expert_section):
-        """
-        Performs structured evaluation using the 80/20 weighting logic.
-        Always returns a markdown table.
-        """
-        prompt = f"""
-You are an EU tender evaluator. Compare the CV to the Expert Requirements.
+    # ------------------- PROCESS CV FOLDER -------------------
 
-### EXPERT REQUIREMENTS
-{expert_section}
+    def process_cv_folder(self, folder_path: str, mode: str = "structured") -> List[Any]:
+        """Process all CVs in a folder"""
+        cv_files = []
+        for ext in ["*.pdf", "*.PDF", "*.doc", "*.DOC", "*.docx", "*.DOCX"]:
+            cv_files.extend(Path(folder_path).glob(ext))
 
-### CANDIDATE CV
-{cv_text}
+        print(f"🔍 Found {len(cv_files)} CV files in {folder_path}")
+        if not cv_files:
+            print("⚠️ No CV files found! Check uploads.")
+            return []
 
-Write the response **exactly** in this order and in markdown syntax:
-
-## Evaluation of Candidate CV Against Expert Requirements
-
-### Evaluation Summary Table
-| Category | Description | Weight | Score (0–100) | Weighted Score | Notes |
-|-----------|--------------|---------|----------------|----------------|--------|
-| Academic Qualifications | Education level and relevance | - | {{score}} | - | {{short note}} |
-| General Professional Experience | Years, managerial exposure, relevance | 0.8 | {{score}} | {{score*0.8}} | {{short note}} |
-| Specific Professional Experience | Relevance to field/geography/EU context | 0.2 | {{score}} | {{score*0.2}} | {{short note}} |
-| Language & Other Skills | English, communication, IT | - | {{score}} | - | {{short note}} |
-
-After the table, add:
-
-**Total Weighted Score:** [number]/100  
-**Fit Level:** High / Medium / Low  
-
-### Major Strengths
-- ...
-
-### Weaknesses / Gaps
-- ...
-
-### Summary
-Write a 3–5 line summary of the overall fit.
-
-Do not skip or rename any heading. Do not return plain text or prose before the table.
-"""
-        return self._ask_openai(prompt, temperature=0.25)
-
-    # ======================================================
-    # 🧩 CRITICAL ASSESSMENT (unchanged)
-    # ======================================================
-    def critical_assessment(self, cv_text, expert_section):
-        """
-        Critical narrative mode (same as old version).
-        """
-        prompt = f"""
-You are an EU tender evaluator performing a critical assessment.
-
-### EXPERT REQUIREMENTS
-{expert_section}
-
-### CANDIDATE CV
-{cv_text}
-
-Write the evaluation exactly as before:
-
-## Evaluation of Candidate CV Against Expert Requirements
-
-### Major Strengths
-[List bullet points]
-
-### Weaknesses / Gaps
-[List bullet points]
-
-### Risks Related to Eligibility or Delivery
-[List bullet points]
-
-### Final Recommendation
-Conclude with one line: Highly Suitable / Suitable / Borderline / Not Suitable
-
-Then restate:
-**Fit Level:** Critical Narrative
-"""
-        return self._ask_openai(prompt, temperature=0.3)
-
-    # ======================================================
-    # 🧠 OPENAI HELPER
-    # ======================================================
-    def _ask_openai(self, prompt, temperature=0.25):
-        if not self.client:
-            return "⚠️ No OpenAI API key provided."
-        try:
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=temperature,
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            return f"⚠️ Error from OpenAI API: {e}"
-
-    # ======================================================
-    # 🔎 SCORE & FIT HELPERS
-    # ======================================================
-    def _extract_score_from_text(self, text):
-        match = re.search(r"(\b\d{1,3}\b)\s*/\s*100", text)
-        if match:
+        for cv_file in cv_files:
             try:
-                val = int(match.group(1))
-                return min(max(val, 0), 100)
-            except:
-                return None
-        match = re.search(r"Total\s*Weighted\s*Score\s*[:\-]?\s*(\d{1,3})", text)
-        if match:
-            return int(match.group(1))
-        return None
-
-    def _derive_fit_from_report(self, text):
-        if re.search(r"high(ly)?\s*suitab|strong|excellent|outstanding", text, re.I):
-            return "High Fit"
-        if re.search(r"adequate|satisf|medium|good", text, re.I):
-            return "Medium Fit"
-        if re.search(r"borderline|weak|limited|low", text, re.I):
-            return "Low Fit"
-        if re.search(r"not\s*suitab", text, re.I):
-            return "Not Suitable"
-        return "Unclassified"
-
-    # ======================================================
-    # 🪄 SELF-CONTAINED FOLDER PROCESSOR
-    # ======================================================
-    def process_cv_folder(self, cv_folder, expert_section, mode="structured"):
-        """
-        Processes all CVs in a folder using the restored logic.
-        """
-        if not os.path.exists(cv_folder):
-            return [{"candidate_name": "⚠️ Folder not found", "report": "", "fit_level": ""}]
-
-        results = []
-        for file_name in os.listdir(cv_folder):
-            file_path = os.path.join(cv_folder, file_name)
-            if not os.path.isfile(file_path):
+                print(f"🧾 Processing: {cv_file.name}")
+                cv_text = self._extract_cv_text(cv_file)
+                if mode == "critical":
+                    report = self._assess_candidate_critical(cv_file.name, cv_text)
+                    self.assessments.append(report)
+                else:
+                    assessment = self._assess_candidate_structured(cv_file.name, cv_text)
+                    self.assessments.append(assessment)
+            except Exception as e:
+                print(f"❌ Error processing {cv_file.name}: {e}")
                 continue
 
-            candidate_name = os.path.splitext(file_name)[0]
-            cv_text = self._extract_text_from_cv(file_path)
+        print(f"✅ Completed assessments for {len(self.assessments)} candidates.")
+        return self.assessments
 
-            if mode == "critical":
-                report = self.critical_assessment(cv_text, expert_section)
-            else:
-                report = self.structured_assessment(cv_text, expert_section)
+    # ------------------- FILE HELPERS -------------------
 
-            score = self._extract_score_from_text(report)
-            fit = self._derive_fit_from_report(report)
-            results.append({
-                "candidate_name": candidate_name,
-                "report": report,
-                "overall_score": score,
-                "fit_level": fit,
-            })
-        return results
+    def _extract_cv_text(self, file_path: Path) -> str:
+        """Extract text from CV file"""
+        if file_path.suffix.lower() == ".pdf":
+            return self._extract_text_from_pdf(str(file_path))
+        return self._extract_text_from_word(str(file_path))
+
+    def _extract_text_from_pdf(self, file_path: str) -> str:
+        """Extract text from PDF file"""
+        text = []
+        with open(file_path, "rb") as file:
+            reader = PyPDF2.PdfReader(file)
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text.append(page_text)
+        return "\n".join(text)
+
+    def _extract_text_from_word(self, file_path: str) -> str:
+        """Extract full text from a Word (.docx) file including tables, text boxes, and nested items."""
+        from docx import Document
+        from docx.oxml.table import CT_Tbl
+        from docx.oxml.text.paragraph import CT_P
+        import itertools
+    
+        doc = Document(file_path)
+    
+        def iter_block_items(parent):
+            """Yield paragraphs and tables in document order (recursively for nested tables)."""
+            for child in parent.element.body.iterchildren():
+                if isinstance(child, CT_P):
+                    yield parent.paragraphs[len(list(itertools.takewhile(lambda p: p._p is not child, parent.paragraphs)))]
+                elif isinstance(child, CT_Tbl):
+                    yield parent.tables[len(list(itertools.takewhile(lambda t: t._tbl is not child, parent.tables)))]
+    
+        def get_text_from_cell(cell):
+            parts = []
+            for paragraph in cell.paragraphs:
+                if paragraph.text.strip():
+                    parts.append(paragraph.text.strip())
+            for table in cell.tables:
+                parts.append(get_text_from_table(table))
+            return " ".join(parts)
+    
+        def get_text_from_table(table):
+            rows_text = []
+            for row in table.rows:
+                row_text = " ".join(get_text_from_cell(c) for c in row.cells if c.text.strip())
+                if row_text:
+                    rows_text.append(row_text)
+            return " ".join(rows_text)
+    
+        text_blocks = []
+        for block in iter_block_items(doc):
+            if isinstance(block, type(doc.paragraphs[0])):
+                if block.text.strip():
+                    text_blocks.append(block.text.strip())
+            elif isinstance(block, type(doc.tables[0])):
+                table_text = get_text_from_table(block)
+                if table_text:
+                    text_blocks.append(table_text)
+    
+        # Clean and merge
+        text = " ".join(text_blocks)
+        text = re.sub(r"\s{2,}", " ", text)
+        text = re.sub(r"(\w)-\s+(\w)", r"\1\2", text)
+        return text.strip()
+    
+        
+        
+
+
+    # ------------------- STRUCTURED (DASHBOARD) MODE -------------------
+
+    def _assess_candidate_structured(self, filename: str, cv_text: str) -> CandidateAssessment:
+        """Structured scoring (dashboard mode)"""
+        prompt = f"""
+You are an HR evaluator performing a structured, detailed assessment of a candidate.
+
+Compare the candidate’s CV to the job requirements below.
+Assign numeric scores (0–100) and provide detailed reasoning for:
+- Education
+- Experience
+- Skills
+- Job-specific Fit
+
+Return only valid JSON.
+
+JOB REQUIREMENTS:
+{self.job_requirements[:10000]}
+
+CANDIDATE CV:
+{cv_text[:12000]}
+"""
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an HR evaluation system. Return ONLY valid JSON.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.1,
+                max_tokens=9000,
+            )
+
+            raw_output = response.choices[0].message.content.strip()
+            clean_json = self._clean_json(raw_output)
+            data = json.loads(clean_json)
+
+            return CandidateAssessment(
+                candidate_name=data.get("candidate_name", filename),
+                filename=filename,
+                overall_score=data.get("summary", {}).get("overall_fit_score", 0),
+                fit_level=data.get("summary", {}).get("fit_level", "Unknown"),
+                education_details=data.get("scoring_breakdown", {}).get("education", {}),
+                experience_details=data.get("scoring_breakdown", {}).get("experience", {}),
+                skills_details=data.get("scoring_breakdown", {}).get("skills", {}),
+                job_fit_details=data.get("scoring_breakdown", {}).get("job_specific_fit", {}),
+                weighted_score_total=data.get("weighted_score_total", 0),
+                executive_summary=data.get("executive_summary", {}),
+                recommendation=data.get("recommendation", {}),
+                interview_focus_areas=data.get("interview_focus_areas", []),
+                red_flags=data.get("red_flags", []),
+                potential_concerns=data.get("potential_concerns", []),
+                assessed_at=datetime.now().isoformat(),
+            )
+
+        except Exception as e:
+            print(f"❌ Error in structured assessment: {e}")
+            return CandidateAssessment(
+                candidate_name="Error",
+                filename=filename,
+                overall_score=0,
+                fit_level="Error",
+                education_details={},
+                experience_details={},
+                skills_details={},
+                job_fit_details={},
+                weighted_score_total=0,
+                executive_summary={"recommendation": "Assessment failed"},
+                recommendation={"verdict": "Error", "rationale": str(e)},
+                interview_focus_areas=[],
+                red_flags=[],
+                potential_concerns=[],
+                assessed_at=datetime.now().isoformat(),
+            )
+
+    # ------------------- CRITICAL + TAILORING MODE -------------------
+
+    def _assess_candidate_critical(self, filename: str, cv_text: str) -> Dict[str, Any]:
+        """Critical narrative evaluation with semantic donor detection, regex fallback, and dynamic donor context."""
+
+        # ---------- 1️⃣ Semantic donor detection ----------
+        donor_query = f"""
+        Identify the main funding organization mentioned or implied in this tender.
+        Return ONLY the donor name (e.g., 'World Bank', 'European Union', 'ADB', 'USAID', 'UNDP', 'AfDB', 'Unknown').
+        If uncertain, answer exactly 'Unknown'.
+        TENDER TEXT (excerpt):
+        {self.job_requirements[:8000]}
+        """
+        donor_match = "Unknown"
+        try:
+            resp = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": donor_query}],
+                temperature=0,
+                max_tokens=10,
+            )
+            donor_match = resp.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"⚠️ Donor semantic detection failed, fallback triggered: {e}")
+
+        # ---------- 2️⃣ Regex fallback ----------
+        text_lower = self.job_requirements.lower()
+        donors = {
+            "World Bank": r"\b(world\s*bank|wbg|ifc|ida|ibrd)\b",
+            "European Union": r"\b(european\s*union|eu\s+delegation|europeaid|neighbourhood|dg\s*intl)\b",
+            "Asian Development Bank": r"\b(asian\s+development\s+bank|adb)\b",
+            "USAID": r"\b(usaid|united\s+states\s+agency\s+for\s+international\s+development)\b",
+            "African Development Bank": r"\b(african\s+development\s+bank|afdb)\b",
+            "UNDP": r"\b(undp|united\s+nations\s+development\s+programme)\b",
+        }
+        if donor_match == "Unknown":
+            for name, pattern in donors.items():
+                if re.search(pattern, text_lower):
+                    donor_match = name
+                    break
+        if donor_match == "Unknown":
+            donor_match = "General donor context"
+
+        # ---------- 3️⃣ Build the prompt ----------
+        prompt = f"""
+You are a senior evaluator assessing candidates for a tender funded by **{donor_match}**.
+
+Perform a detailed, evidence-based critical evaluation of the candidate’s CV
+against the JOB REQUIREMENTS and contextualize every criterion according to {donor_match}'s
+typical focus and terminology.
+Do not mention other donors (EU, ADB, etc.) unless explicitly stated in the tender or CV.
+Focus exclusively on {donor_match} as the donor context.
+
+---
+
+### REQUIRED OUTPUT STRUCTURE (Markdown)
+
+#### 🧭 Critical Evaluation – {filename}
+
+**Evaluation Table**
+
+| Section | Criteria | Score (0–1) | Confidence | Evaluator Commentary |
+|----------|-----------|-------------|-------------|----------------------|
+| **General Tender Context (20% weight)** | Understanding of project/tender context |  |  |  |
+|  | Familiarity with region/country context |  |  |  |
+| **Specific Expert Requirements (80% weight)** | Team leadership and management |  |  |  |
+|  | Relevant domain expertise |  |  |  |
+|  | Technical or regulatory knowledge |  |  |  |
+|  | Donor project experience ({donor_match}) |  |  |  |
+|  | Communication and coordination skills |  |  |  |
+|  | Educational background |  |  |  |
+|  | Analytical and reporting skills |  |  |  |
+|  | Language proficiency |  |  |  |
+
+Each cell must contain a numeric score (0–1), confidence (High/Medium/Low), and concise commentary (1–3 sentences).
+
+After the table, show:
+**Final Weighted Score (80% expert, 20% context): X.XX / 1.00**
+
+---
+
+**📊 Critical Summary**
+Summarize alignment with {donor_match} project style and focus.
+
+**📉 Evaluator Summary**
+List 3–5 key takeaways (strengths, weaknesses, donor-fit).
+
+**📌 Strengths & Weaknesses**
+Provide at least 3 evidence-based strengths and 3 weaknesses.
+
+**✂️ Tailoring Suggestions (How to Strengthen CV for This Role)**
+
+**a. Rewriting & Emphasis Suggestions**
+Suggest concrete text-level improvements to highlight donor-specific relevance.
+
+**b. 🪶 Word Recommendations (Tender Keyword Alignment)**
+Provide 5–10 recommended keyword alignments using {donor_match} phrasing.
+
+| Current CV Wording | Recommended {donor_match} Keyword | Why |
+|--------------------|----------------------------------|-----|
+| "Project manager" | "Implementation support consultant under {donor_match} framework" | Aligns with {donor_match} terminology. |
+| "Drafted reports" | "Prepared deliverables per {donor_match} quality control protocols" | Matches donor QA phrasing. |
+| "Policy development" | "Institutional reform and capacity-building support" | Fits {donor_match} operational tone. |
+
+---
+
+### CONTEXT INPUTS
+
+**Tender Context (20%)**
+{self.job_requirements[:4000]}
+
+**Candidate CV**
+{cv_text[:9000]}
+"""
+
+        # ---------- 4️⃣ Call GPT ----------
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a senior evaluator for international tenders. "
+                            "Produce a full markdown report with scores, commentary, and rewording recommendations. "
+                            "Always include the evaluation table and numeric final score."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.15,
+                max_tokens=8500,
+            )
+
+            report_text = response.choices[0].message.content.strip()
+            match = re.search(r"Final Weighted Score.*?([0-9]\.[0-9]+)", report_text)
+            final_score = float(match.group(1)) if match else 0.0
+
+            return {
+                "candidate_name": filename,
+                "report": f"**Detected Donor Context:** {donor_match}\n\n" + report_text,
+                "final_score": final_score,
+            }
+
+        except Exception as e:
+            return {
+                "candidate_name": filename,
+                "report": f"❌ Error generating critical evaluation: {e}",
+                "final_score": 0.0,
+            }
+
+    # ------------------- JSON CLEANER -------------------
+
+    def _clean_json(self, content: str) -> str:
+        """Extract clean JSON from model output."""
+        content = content.strip()
+        content = re.sub(r"^```(json)?", "", content)
+        content = re.sub(r"```$", "", content)
+        match = re.search(r"(\{.*\})", content, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return content
