@@ -161,7 +161,12 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
         # ------------------- CRITICAL (NARRATIVE) MODE -------------------
 
         else:
-            ranked = sorted(results, key=lambda x: x.get("final_score", 0), reverse=True)
+            ranked = sorted(
+                [r for r in results if r],  # remove any None
+                key=lambda x: x.get("final_score", 0) if isinstance(x, dict) else getattr(x, "overall_score", 0),
+                reverse=True
+            )
+
             st.markdown("## 🏆 Candidate Ranking (Based on Final Scores)")
             st.table([
                 {
