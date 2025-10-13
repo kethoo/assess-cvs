@@ -54,7 +54,7 @@ expert_name = st.text_input(
 # ------------------- EXTRACTION FUNCTIONS -------------------
 
 def extract_expert_section(file_path: str, expert_name: str) -> str:
-    """Extract expert section from Word document"""
+    """Extract ALL occurrences of expert section from Word document"""
     if not file_path or not expert_name:
         return ""
     
@@ -63,9 +63,9 @@ def extract_expert_section(file_path: str, expert_name: str) -> str:
     
     try:
         doc = Document(file_path)
-        result_parts = []
+        all_sections = []  # Will hold multiple extracted sections
+        current_section = []
         started = False
-        current_text = []
         
         # Extract number from expert name
         expert_num_match = re.search(r'(\d+)', expert_name)
@@ -86,58 +86,76 @@ def extract_expert_section(file_path: str, expert_name: str) -> str:
                     return True
             return False
         
-        # Check if this is the last expert
-        all_text = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-        found_start = False
-        is_last_expert = True
+        def is_major_section(text):
+            """Check if this is a major document section break"""
+            text_lower = text.lower().strip()
+            major_keywords = [
+                'part b', 'part a', 'annex', 'background information', 
+                'contracting authority', 'location and duration', 
+                'reports and deliverables', 'tender specifications'
+            ]
+            return any(kw in text_lower for kw in major_keywords)
         
-        for txt in all_text:
-            if not found_start:
-                if expert_name.lower() in txt.lower():
-                    found_start = True
-            elif found_start:
-                if is_different_expert(txt):
-                    is_last_expert = False
-                    break
-        
-        # Extract the section
+        # Extract ALL occurrences
         for para in doc.paragraphs:
             text = para.text.strip()
             if not text:
                 continue
             
-            # Start extraction
-            if not started:
-                if expert_name.lower() in text.lower():
+            # Check if this starts our expert section (must be a header, not just a mention)
+            if expert_name.lower() in text.lower():
+                # Only start new section if this looks like a header/title
+                # (short line, or has colon, or is bold, or starts with the expert name)
+                is_header = (
+                    len(text) < 150 or  # Short lines are usually headers
+                    ':' in text or  # Has colon like "Key expert 1 (KE 1):"
+                    is_bold(para) or  # Bold text
+                    text.lower().startswith(expert_name.lower()[:10])  # Starts with expert name
+                )
+                
+                if is_header:
+                    # Save previous section if exists
+                    if current_section:
+                        all_sections.append(' '.join(current_section))
+                        current_section = []
+                    
+                    # Start new section
                     started = True
-                    current_text.append(text)
-                continue
+                    current_section.append(text)
+                    continue
             
-            # Once started...
+            # If we're currently extracting
             if started:
                 # STOP: Different expert
                 if is_different_expert(text):
-                    break
+                    # Save this section
+                    if current_section:
+                        all_sections.append(' '.join(current_section))
+                        current_section = []
+                    started = False
+                    continue
                 
-                # STOP: Last expert + bold
-                if is_last_expert and is_bold(para):
-                    break
+                # STOP: Major section break (like Part B)
+                if is_bold(para) and is_major_section(text):
+                    # Save this section
+                    if current_section:
+                        all_sections.append(' '.join(current_section))
+                        current_section = []
+                    started = False
+                    continue
                 
-                # CONTINUE: Bold subsection (not last expert)
-                if not is_last_expert and is_bold(para):
-                    if current_text:
-                        result_parts.append(' '.join(current_text))
-                        current_text = []
-                    result_parts.append('\n----------------------------------------------------------\n')
-                    result_parts.append(text)
-                else:
-                    current_text.append(text)
+                # CONTINUE: Regular content
+                current_section.append(text)
         
-        # Add remaining
-        if current_text:
-            result_parts.append(' '.join(current_text))
+        # Add last section if exists
+        if current_section:
+            all_sections.append(' '.join(current_section))
         
-        return '\n\n'.join(result_parts).strip()
+        # Combine all sections with separator
+        if all_sections:
+            return '\n\n----------------------------------------------------------\n\n'.join(all_sections).strip()
+        
+        return ""
     
     except Exception as e:
         st.error(f"Extraction error: {e}")
@@ -176,7 +194,9 @@ if extract_button:
         
         if expert_section:
             st.session_state.expert_section_text = expert_section
-            st.success(f"✅ Extracted {len(expert_section)} characters for: {expert_name}")
+            # Count sections (separated by the long dashes)
+            num_sections = expert_section.count('----------------------------------------------------------') + 1
+            st.success(f"✅ Extracted {len(expert_section)} characters from {num_sections} section(s) for: {expert_name}")
             st.info("Scroll down to see the extracted content in the text area below ⬇️")
         else:
             st.session_state.expert_section_text = ""
@@ -202,8 +222,8 @@ if req_file and expert_name.strip():
     st.session_state.expert_section_text = edited_section
     
     if st.session_state.expert_section_text:
-        separator_count = st.session_state.expert_section_text.count('----------------------------------------------------------')
-        st.info(f"📊 {len(st.session_state.expert_section_text)} chars | {separator_count + 1} subsections")
+        num_sections = st.session_state.expert_section_text.count('----------------------------------------------------------') + 1
+        st.info(f"📊 {len(st.session_state.expert_section_text)} chars | {num_sections} section(s) found | Sections separated by dashes")
     else:
         st.info("👆 Click 'Extract Expert Section' button above to automatically extract, or paste content manually here")
 
