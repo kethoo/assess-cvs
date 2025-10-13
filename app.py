@@ -25,51 +25,56 @@ if req_file:
 
     st.success(f"✅ Tender uploaded: {req_file.name}")
 
+    # Load tender text
     system_temp = CVAssessmentSystem(api_key=api_key or None)
     tender_text = system_temp.load_job_requirements(tender_path)
     st.info("📘 Tender text loaded successfully.")
 
 # --- Expert Name Input ---
-st.markdown("### 🎯 Enter the Expert Role Title (exactly as in the tender file)")
+st.markdown("### 🎯 Enter the EXACT Expert Role Title (as in the tender)")
 expert_name = st.text_input(
     "Example: Team leader Expert in Employment",
-    placeholder="Enter the exact expert role title (case-insensitive match)"
+    placeholder="Enter exact expert role title (case-insensitive)"
 )
 
-# --- Robust Expert Section Extraction ---
+# --- POWERFUL FINAL Expert Section Extraction ---
 def extract_expert_section(full_text: str, expert_name: str) -> str:
     """
-    Extract one continuous section beginning with the first occurrence of the expert_name
-    and ending before the next Key Expert/Non-Key/Annex/etc.
-    Handles inconsistent whitespace in converted PDF/Word text.
+    Finds EVERY instance of the exact expert name and extracts full context
+    from each occurrence until just before 'Key Expert 2' or similar next expert section.
+    Returns the concatenation of all such sections.
     """
     if not full_text or not expert_name:
         return ""
 
-    # Normalise whitespace for reliable matching
+    # Normalize text (remove redundant spaces)
     text = re.sub(r"\s+", " ", full_text)
 
-    # Build a tolerant pattern for the expert name (allowing variable spaces)
-    name_pattern = re.sub(r"\s+", r"\\s+", re.escape(expert_name.strip()))
-    start_match = re.search(name_pattern, text, re.IGNORECASE)
-    if not start_match:
-        return ""
-
-    start_index = start_match.start()
-
-    # Find next section boundary
-    end_match = re.search(
-        r"(?:Key\s*Expert\s*\d|KE\s*\d|Expert\s+in\s+\w+|Non[-\s]*Key|Annex|General\s+Conditions|Terms|Reimbursement|END)",
-        text[start_index:],
+    # Pattern for next expert marker
+    stop_pattern = re.compile(
+        r"(Key\s*Expert\s*2|KE\s*2|Expert\s+2|Non[-\s]*Key|Annex|General\s+Conditions|Terms|Reimbursement|END)",
         re.IGNORECASE,
     )
 
-    end_index = start_index + end_match.start() if end_match else len(text)
-    section = text[start_index:end_index]
+    # Find all exact matches of the expert name (case-insensitive)
+    start_iter = [m.start() for m in re.finditer(re.escape(expert_name), text, re.IGNORECASE)]
+    if not start_iter:
+        return ""
 
-    # Tidy up formatting
-    section = re.sub(r"\s{2,}", " ", section).strip()
-    return section
+    sections = []
+    for start_index in start_iter:
+        # Find the next stop marker *after* this start index
+        stop_match = stop_pattern.search(text, start_index)
+        end_index = stop_match.start() if stop_match else len(text)
+
+        # Slice out the section
+        section = text[start_index:end_index]
+        section = re.sub(r"\s{2,}", " ", section).strip()
+        if section:
+            sections.append(section)
+
+    # Combine all found sections
+    return "\n\n---\n\n".join(sections)
 
 
 # --- Upload CVs ---
@@ -92,11 +97,14 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
 
         st.info("⏳ Processing CVs — please wait...")
 
+        # Initialize system
         system = CVAssessmentSystem(api_key=api_key or None)
+
+        # Extract expert section dynamically
         expert_section = extract_expert_section(tender_text, expert_name)
 
         if not expert_section:
-            st.warning("⚠️ Could not precisely locate that expert section. The full tender will be used as fallback context.")
+            st.warning("⚠️ Could not locate that expert section. Using full tender as fallback context.")
             combined_text = tender_text
         else:
             combined_text = (
@@ -106,9 +114,12 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 f"{expert_section}"
             )
             st.success(f"✅ Extracted expert section for: {expert_name}")
-            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:4000], height=300)
+            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:4000], height=350)
 
+        # Assign requirements text for evaluation
         system.job_requirements = combined_text
+
+        # Process CVs
         results = system.process_cv_folder(
             cv_folder,
             mode="critical" if mode == "Critical Narrative" else "structured"
@@ -116,6 +127,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
 
         st.success(f"✅ Processed {len(results)} candidate(s)")
 
+        # ---------- STRUCTURED MODE ----------
         if mode == "Structured (Dashboard)":
             ranked = sorted(results, key=lambda x: x.overall_score, reverse=True)
             st.markdown("## 🏆 Candidate Ranking (Based on Structured Scores)")
@@ -123,6 +135,8 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 {"Rank": i + 1, "Candidate": r.candidate_name, "Score": r.overall_score, "Fit Level": r.fit_level}
                 for i, r in enumerate(ranked)
             ])
+
+        # ---------- CRITICAL NARRATIVE MODE ----------
         else:
             ranked = sorted(results, key=lambda x: x.get("final_score", 0), reverse=True)
             st.markdown("## 🏆 Candidate Ranking (Based on Final Scores)")
@@ -130,6 +144,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 {"Rank": i + 1, "Candidate": r["candidate_name"], "Final Score": f"{r['final_score']:.2f}"}
                 for i, r in enumerate(ranked)
             ])
+
             for r in ranked:
                 with st.expander(f"{r['candidate_name']} — Critical Evaluation"):
                     report = r["report"]
@@ -141,6 +156,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                     else:
                         st.markdown(report)
                     st.markdown(f"**🧮 Final Score:** {r['final_score']:.2f} / 1.00")
+
 else:
     if not expert_name.strip():
         st.warning("⚠️ Please enter the expert role title before running the assessment.")
