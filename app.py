@@ -184,6 +184,11 @@ if extract_button:
             st.session_state.extracted_section = expert_section
             st.session_state.section_extracted = True
             st.success(f"✅ Extracted {len(expert_section)} characters for: {expert_name}")
+            # Force rerun to update text area
+            try:
+                st.rerun()
+            except AttributeError:
+                st.experimental_rerun()
         else:
             st.session_state.extracted_section = ""
             st.session_state.section_extracted = False
@@ -194,20 +199,24 @@ if extract_button:
 if req_file and expert_name.strip():
     st.markdown("### 📝 Expert Section Preview & Edit")
     
+    # Force text area to show current session state value
+    current_value = st.session_state.extracted_section
+    
     edited_section = st.text_area(
         "Expert Section Content (editable)",
-        value=st.session_state.extracted_section,
+        value=current_value,
         height=400,
         help="Edit as needed. This will be used with 80% weight.",
         key="expert_section_editor"
     )
     
-    # Update session state
-    st.session_state.extracted_section = edited_section
+    # Only update if user actually edited (different from current)
+    if edited_section != current_value:
+        st.session_state.extracted_section = edited_section
     
-    if edited_section:
-        separator_count = edited_section.count('----------------------------------------------------------')
-        st.info(f"📊 {len(edited_section)} chars | {separator_count + 1} subsections")
+    if current_value:
+        separator_count = current_value.count('----------------------------------------------------------')
+        st.info(f"📊 {len(current_value)} chars | {separator_count + 1} subsections")
 
 # ------------------- UPLOAD CVS -------------------
 
