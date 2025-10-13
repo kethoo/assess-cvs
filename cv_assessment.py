@@ -39,7 +39,7 @@ class CVAssessmentSystem:
         except Exception as e:
             return f"⚠️ Error loading file: {e}"
 
-    # --- FLEXIBLE EXPERT EXTRACTOR (CASE/ABBREV-AWARE) ---
+    # --- NEW FLEXIBLE EXTRACTION (KE1/KE 1/Key Expert 1...) ---
     def extract_expert_sections_by_bold(self, docx_path, target_expert_name):
         """
         Extracts all occurrences of a given expert section (e.g. 'Key Expert 2' or 'KE2')
@@ -51,11 +51,9 @@ class CVAssessmentSystem:
         except Exception as e:
             return f"⚠️ Could not open document: {e}"
 
-        # Flatten paragraphs into one continuous text
         text = " ".join(p.text.strip() for p in doc.paragraphs if p.text.strip())
-        text = " ".join(text.split())
+        text = " ".join(text.split())  # normalize spaces
 
-        # Normalize expert input
         target_expert_name = (
             target_expert_name.lower()
             .replace("(", "")
@@ -63,21 +61,17 @@ class CVAssessmentSystem:
             .strip()
         )
 
-        # Extract expert number (e.g. 1, 2)
         num_match = re.search(r"(?:key\s*expert\s*|ke\s*)(\d+)", target_expert_name, re.IGNORECASE)
         current_num = int(num_match.group(1)) if num_match else 1
         next_num = current_num + 1
 
-        # Regex pattern to find expert sections flexibly
         pattern = re.compile(
             rf"(?i)((?:Key\s*Expert\s*{current_num}\b|KE\s*{current_num}\b).*?)"
             rf"(?=(?:Key\s*Expert\s*(?:{next_num}|[1-9]\d*)\b|KE\s*(?:{next_num}|[1-9]\d*)\b|$))"
         )
 
         matches = pattern.findall(text)
-
         if not matches:
-            # fallback manual search
             matches = re.findall(
                 rf"(?i)(?:Key\s*Expert\s*{current_num}\b|KE\s*{current_num}\b).*?(?=(?:Key\s*Expert|KE|$))",
                 text,
@@ -89,7 +83,7 @@ class CVAssessmentSystem:
 
         return "\n\n---------------\n\n".join(clean_sections)
 
-    # --- INTERNAL OPENAI WRAPPER ---
+    # --- INTERNAL OPENAI CALL WRAPPER ---
     def _ask_openai(self, prompt, temperature=0.2):
         if not self.client:
             return "⚠️ No OpenAI API key provided."
@@ -103,68 +97,92 @@ class CVAssessmentSystem:
         except Exception as e:
             return f"⚠️ Error from OpenAI API: {e}"
 
-    # --- STRUCTURED EVALUATION ---
+    # --- STRUCTURED EVALUATION (Classic Table with 80/20 split) ---
     def structured_assessment(self, cv_text, expert_section):
         """
-        Compares candidate CV to expert requirements in a structured scoring format.
+        Compare CV to tender expert section using structured analysis with weighted scores.
+        - 80% General experience
+        - 20% Specific experience
         """
         prompt = f"""
-        You are an expert CV assessor.
-        Compare the following CV against the expert section.
+You are an expert evaluator for EU tender CVs.
 
-        === EXPERT REQUIREMENTS ===
-        {expert_section}
+Compare the following CV to the expert requirements and provide a detailed structured assessment.
 
-        === CANDIDATE CV ===
-        {cv_text}
+### EXPERT REQUIREMENTS:
+{expert_section}
 
-        Evaluate based on:
-        1. Academic qualifications
-        2. General professional experience
-        3. Specific professional experience
-        4. Language and other skills
+### CANDIDATE CV:
+{cv_text}
 
-        Provide:
-        - A detailed justification per category
-        - A score (0–100) for each category
-        - A total fit score and a short summary conclusion
-        """
+Evaluate across these categories:
 
-        return self._ask_openai(prompt)
+1. **Academic Qualifications**
+   - Relevance of degree(s)
+   - Minimum years required
 
-    # --- CRITICAL EVALUATION ---
+2. **General Professional Experience**
+   - Breadth of relevant experience
+   - Duration and seniority
+   - Management / leadership exposure
+
+3. **Specific Professional Experience**
+   - Experience in similar thematic fields or regions
+   - Technical alignment with assignment
+   - EU project exposure
+
+4. **Language and Other Skills**
+   - Languages required vs present
+   - Other essential skills (communication, analytical, etc.)
+
+Scoring rules:
+- Each category is scored 0–100.
+- Apply 80/20 weighting between General and Specific experience to form the overall score.
+- Present your response as a markdown table followed by a concise narrative summary.
+
+Output format example:
+
+| Category | Score | Weight | Weighted Score | Notes |
+|-----------|-------|---------|----------------|--------|
+| Academic Qualifications | 90 | - | - | Degree matches requirements |
+| General Experience | 85 | 0.8 | 68 | 12+ years, solid management background |
+| Specific Experience | 75 | 0.2 | 15 | 5 years in target field |
+| Language & Other Skills | 100 | - | - | Fluent English |
+| **TOTAL** | **-** | **-** | **83** | Overall fit strong |
+
+Then provide:
+- **Strengths**
+- **Weaknesses**
+- **Final Evaluation Summary** (Short paragraph)
+"""
+        return self._ask_openai(prompt, temperature=0.2)
+
+    # --- CRITICAL (DETAILED GAP) EVALUATION ---
     def critical_assessment(self, cv_text, expert_section):
         """
-        Produces a deep evaluative report highlighting missing or risky areas.
+        Produces a critical risk/gap evaluation with recommendations.
         """
         prompt = f"""
-        You are a senior evaluator for EU tenders.
+You are a senior evaluator for EU tender experts.
 
-        === EXPERT REQUIREMENTS ===
-        {expert_section}
+### EXPERT REQUIREMENTS:
+{expert_section}
 
-        === CANDIDATE CV ===
-        {cv_text}
+### CANDIDATE CV:
+{cv_text}
 
-        Conduct a critical evaluation:
-        - Identify explicit gaps vs. requirements
-        - Flag any unclear or unverifiable claims
-        - Estimate risk factors or weaknesses for selection
-        - Provide a brief hiring recommendation
-
-        Output format:
-        - Key strengths
-        - Key weaknesses
-        - Risk summary
-        - Overall recommendation (Yes / No / Borderline)
-        """
-
+Perform a **critical narrative evaluation**:
+- Identify explicit and implicit gaps between CV and requirements.
+- Point out missing or weak criteria (e.g., lack of years, region experience).
+- Highlight risks to eligibility or competitiveness.
+- Conclude with a recommendation: **Highly Suitable / Suitable / Borderline / Not Suitable**.
+"""
         return self._ask_openai(prompt, temperature=0.3)
 
-    # --- PROCESS CV FOLDER ---
+    # --- MAIN CV PROCESSING PIPELINE ---
     def process_cv_folder(self, cv_folder, expert_section, mode="structured"):
         """
-        Process all CVs in a folder for either 'structured' or 'critical' evaluation.
+        Processes all CVs in a folder for structured or critical evaluation.
         """
         if not os.path.exists(cv_folder):
             return [{"candidate_name": "⚠️ Folder not found", "report": "", "fit_level": ""}]
@@ -177,7 +195,7 @@ class CVAssessmentSystem:
 
             candidate_name = os.path.splitext(file_name)[0]
 
-            # --- Read CV text ---
+            # --- Extract CV text ---
             ext = os.path.splitext(file_name)[1].lower()
             if ext == ".docx":
                 with open(file_path, "rb") as f:
@@ -193,19 +211,15 @@ class CVAssessmentSystem:
             # --- Choose mode ---
             if mode == "critical":
                 report = self.critical_assessment(cv_text, expert_section)
-                score = None
-                fit = "Critical Review"
+                fit = "Critical Narrative"
             else:
                 report = self.structured_assessment(cv_text, expert_section)
-                score = None
                 fit = "Structured Evaluation"
 
             results.append({
                 "candidate_name": candidate_name,
                 "report": report,
-                "final_score": score,
-                "overall_score": score,
-                "fit_level": fit,
+                "fit_level": fit
             })
 
         return results
