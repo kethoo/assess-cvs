@@ -19,9 +19,9 @@ if 'expert_section_text' not in st.session_state:
 
 api_key = st.text_input("🔑 Enter OpenAI API Key", type="password")
 
-# ------------------- MODE SELECTION -------------------
+# ------------------- MODE SELECTION (LOCKED TO CRITICAL NARRATIVE) -------------------
 
-mode = st.radio("Select Evaluation Mode:", ["Structured (Dashboard)", "Critical Narrative"])
+mode = "Critical Narrative"  # Fixed mode
 
 # ------------------- UPLOAD TENDER -------------------
 
@@ -269,51 +269,34 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
             st.success(f"✅ Using expert section")
 
         system.job_requirements = combined_text
-        results = system.process_cv_folder(
-            cv_folder,
-            mode="critical" if mode == "Critical Narrative" else "structured"
-        )
+        results = system.process_cv_folder(cv_folder, mode="critical")
 
         st.success(f"✅ Processed {len(results)} candidate(s)")
 
-        # ------------------- DISPLAY RESULTS -------------------
+        # ------------------- DISPLAY RESULTS (CRITICAL NARRATIVE MODE) -------------------
 
-        if mode == "Structured (Dashboard)":
-            ranked = sorted(results, key=lambda x: x.overall_score, reverse=True)
-            st.markdown("## 🏆 Candidate Ranking")
-            st.table([
-                {
-                    "Rank": i + 1,
-                    "Candidate": r.candidate_name,
-                    "Score": r.overall_score,
-                    "Fit Level": r.fit_level
-                }
-                for i, r in enumerate(ranked)
-            ])
+        ranked = sorted(results, key=lambda x: x.get("final_score", 0), reverse=True)
+        st.markdown("## 🏆 Candidate Ranking")
+        st.table([
+            {
+                "Rank": i + 1,
+                "Candidate": r["candidate_name"],
+                "Final Score": f"{r['final_score']:.2f}"
+            }
+            for i, r in enumerate(ranked)
+        ])
 
-        else:
-            ranked = sorted(results, key=lambda x: x.get("final_score", 0), reverse=True)
-            st.markdown("## 🏆 Candidate Ranking")
-            st.table([
-                {
-                    "Rank": i + 1,
-                    "Candidate": r["candidate_name"],
-                    "Final Score": f"{r['final_score']:.2f}"
-                }
-                for i, r in enumerate(ranked)
-            ])
-
-            for r in ranked:
-                with st.expander(f"{r['candidate_name']} — Critical Evaluation"):
-                    report = r["report"]
-                    if "✂️ Tailoring Suggestions" in report:
-                        main, tailoring = report.split("✂️ Tailoring Suggestions", 1)
-                        st.markdown(main)
-                        with st.expander("✂️ Tailoring Suggestions"):
-                            st.markdown("✂️ Tailoring Suggestions" + tailoring)
-                    else:
-                        st.markdown(report)
-                    st.markdown(f"**🧮 Final Score:** {r['final_score']:.2f} / 1.00")
+        for r in ranked:
+            with st.expander(f"{r['candidate_name']} — Critical Evaluation"):
+                report = r["report"]
+                if "✂️ Tailoring Suggestions" in report:
+                    main, tailoring = report.split("✂️ Tailoring Suggestions", 1)
+                    st.markdown(main)
+                    with st.expander("✂️ Tailoring Suggestions"):
+                        st.markdown("✂️ Tailoring Suggestions" + tailoring)
+                else:
+                    st.markdown(report)
+                st.markdown(f"**🧮 Final Score:** {r['final_score']:.2f} / 1.00")
 
 # ------------------- WARNINGS -------------------
 
