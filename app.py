@@ -1,9 +1,10 @@
 import streamlit as st
-from cv_assessment import CVAssessmentSystem
+from cv_assessment_modified import CVAssessmentSystem
 import tempfile
 import os
 import re
 from docx import Document
+import pandas as pd
 
 # ------------------- STREAMLIT CONFIG -------------------
 
@@ -14,6 +15,12 @@ st.title("📄 Deep CV Assessment System")
 
 if 'expert_section_text' not in st.session_state:
     st.session_state.expert_section_text = ""
+
+if 'custom_criteria' not in st.session_state:
+    st.session_state.custom_criteria = None
+
+if 'criteria_generated' not in st.session_state:
+    st.session_state.criteria_generated = False
 
 # ------------------- API KEY -------------------
 
@@ -119,6 +126,93 @@ Return ONLY the extracted text for "{expert_name}". If nothing is found, return 
         st.error(f"LLM extraction error: {e}")
         return ""
 
+
+def generate_criteria_and_weights(expert_section: str, general_context: str, api_key: str) -> dict:
+    """Analyze expert requirements and generate custom criteria with appropriate weights"""
+    if not expert_section or not api_key:
+        return None
+    
+    try:
+        import openai
+        import json
+        client = openai.OpenAI(api_key=api_key)
+        
+        prompt = f"""You are analyzing tender requirements to generate assessment criteria with appropriate weights.
+
+Analyze the EXPERT REQUIREMENTS below and identify the most important evaluation criteria.
+
+Your task:
+1. Identify 6-10 key criteria that matter most for this position
+2. Assign weights (as percentages) based on importance signals:
+   - "REQUIRED", "MANDATORY", "ESSENTIAL" → Higher weight (20-30%)
+   - "MUST HAVE", "MINIMUM" → High weight (15-20%)
+   - "PREFERRED", "DESIRABLE", "ADVANTAGEOUS" → Medium weight (10-15%)
+   - "BENEFICIAL", "ASSET" → Lower weight (5-10%)
+3. Consider the job nature (Team Leader needs more leadership weight, Technical Expert needs more technical weight)
+4. Ensure total weight = 80% (this covers the expert-specific requirements)
+
+Return ONLY valid JSON in this exact format:
+{{
+  "criteria": [
+    {{
+      "name": "Leadership and team management experience",
+      "weight": 25,
+      "rationale": "Position requires managing a team of 5+ experts - explicitly marked as ESSENTIAL"
+    }},
+    {{
+      "name": "Water sector domain expertise (10+ years)",
+      "weight": 20,
+      "rationale": "Minimum 10 years experience REQUIRED per ToR section 3.2"
+    }}
+  ]
+}}
+
+EXPERT REQUIREMENTS (80% focus):
+{expert_section[:8000]}
+
+GENERAL CONTEXT (for reference only):
+{general_context[:2000]}
+
+Return ONLY the JSON object with criteria and weights that sum to exactly 80."""
+
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert at analyzing job requirements and determining assessment criteria importance. Return ONLY valid JSON."
+                },
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.2,
+            max_tokens=2000
+        )
+        
+        result_text = response.choices[0].message.content.strip()
+        
+        # Clean JSON
+        result_text = re.sub(r"^```(json)?", "", result_text)
+        result_text = re.sub(r"```$", "", result_text)
+        match = re.search(r"(\{.*\})", result_text, re.DOTALL)
+        if match:
+            result_text = match.group(1).strip()
+        
+        criteria_data = json.loads(result_text)
+        
+        # Validate weights sum to 80
+        total_weight = sum(c['weight'] for c in criteria_data['criteria'])
+        if abs(total_weight - 80) > 2:  # Allow 2% tolerance
+            # Normalize to 80
+            factor = 80 / total_weight
+            for c in criteria_data['criteria']:
+                c['weight'] = round(c['weight'] * factor, 1)
+        
+        return criteria_data
+        
+    except Exception as e:
+        st.error(f"Error generating criteria: {e}")
+        return None
+
 # ------------------- EXTRACT BUTTON -------------------
 
 st.info("💡 **AI Extraction**: The system will use GPT to intelligently identify and extract all requirements specific to your chosen expert position, automatically excluding other positions and irrelevant sections.")
@@ -164,6 +258,79 @@ if req_file and expert_name.strip():
     else:
         st.info("👆 Click 'Extract Expert Section' button above to automatically extract, or paste content manually here")
 
+# ------------------- GENERATE ASSESSMENT CRITERIA -------------------
+
+if st.session_state.expert_section_text and api_key:
+    st.markdown("---")
+    st.markdown("### 🎯 Step 3: Generate Custom Assessment Criteria")
+    
+    st.info("💡 **Adaptive Weighting**: The AI will analyze your expert requirements and create custom criteria with weights based on what's REQUIRED vs PREFERRED in the tender.")
+    
+    if st.button("🧠 Generate Assessment Criteria", disabled=not st.session_state.expert_section_text):
+        with st.spinner("🤖 Analyzing requirements and generating weighted criteria..."):
+            criteria_data = generate_criteria_and_weights(
+                st.session_state.expert_section_text,
+                tender_text,
+                api_key
+            )
+            
+            if criteria_data:
+                st.session_state.custom_criteria = criteria_data
+                st.session_state.criteria_generated = True
+                st.success("✅ Custom assessment criteria generated!")
+                st.rerun()
+    
+    # Display generated criteria
+    if st.session_state.criteria_generated and st.session_state.custom_criteria:
+        st.markdown("#### 📋 Assessment Criteria & Weights")
+        
+        import pandas as pd
+        
+        # Create dataframe for display
+        criteria_list = st.session_state.custom_criteria['criteria']
+        df = pd.DataFrame([
+            {
+                "Criterion": c['name'],
+                "Weight (%)": c['weight'],
+                "Rationale": c['rationale']
+            }
+            for c in criteria_list
+        ])
+        
+        # Add general context row
+        general_row = pd.DataFrame([{
+            "Criterion": "General Tender Context",
+            "Weight (%)": 20,
+            "Rationale": "Understanding of overall project and regional context"
+        }])
+        
+        df_display = pd.concat([general_row, df], ignore_index=True)
+        
+        # Calculate total
+        total_weight = df_display["Weight (%)"].sum()
+        total_row = pd.DataFrame([{
+            "Criterion": "**TOTAL**",
+            "Weight (%)": f"**{total_weight}%**",
+            "Rationale": ""
+        }])
+        
+        df_display = pd.concat([df_display, total_row], ignore_index=True)
+        
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        
+        if total_weight == 100:
+            st.success("✅ Weights sum to 100% - Ready for assessment!")
+        else:
+            st.warning(f"⚠️ Weights sum to {total_weight}% (should be 100%)")
+        
+        # Option to regenerate
+        if st.button("🔄 Regenerate Criteria"):
+            st.session_state.criteria_generated = False
+            st.session_state.custom_criteria = None
+            st.rerun()
+        
+        st.markdown("---")
+
 # ------------------- UPLOAD CVS -------------------
 
 cv_files = st.file_uploader(
@@ -173,6 +340,20 @@ cv_files = st.file_uploader(
 )
 
 # ------------------- RUN ASSESSMENT -------------------
+
+st.markdown("---")
+st.markdown("### 🚀 Step 4: Run Assessment")
+
+# Show status of preparation
+if st.session_state.expert_section_text:
+    st.success("✅ Expert section loaded")
+else:
+    st.warning("⚠️ No expert section loaded")
+
+if st.session_state.criteria_generated:
+    st.success("✅ Custom criteria generated")
+else:
+    st.info("💡 **Tip**: Generate custom criteria first for more accurate weighting!")
 
 if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.strip() and (api_key or os.getenv("OPENAI_API_KEY")):
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -202,7 +383,13 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
             st.success(f"✅ Using expert section")
 
         system.job_requirements = combined_text
-        results = system.process_cv_folder(cv_folder, mode="critical")
+        
+        # Pass custom criteria if available
+        custom_criteria_data = st.session_state.custom_criteria if st.session_state.criteria_generated else None
+        if custom_criteria_data:
+            st.info(f"🎯 Using {len(custom_criteria_data['criteria'])} custom weighted criteria")
+        
+        results = system.process_cv_folder(cv_folder, mode="critical", custom_criteria=custom_criteria_data)
 
         st.success(f"✅ Processed {len(results)} candidate(s)")
 
