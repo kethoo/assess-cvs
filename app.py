@@ -30,7 +30,7 @@ if req_file:
     tender_text = system_temp.load_job_requirements(tender_path)
     st.info("📘 Tender text loaded successfully.")
 
-    # --- Optional debug for checking tender completeness ---
+    # --- Debug: view tender length or ending ---
     st.write(f"Tender text length: {len(tender_text)} characters")
     if st.checkbox("Show tail of tender (last 1000 chars)"):
         st.text(tender_text[-1000:])
@@ -38,49 +38,51 @@ if req_file:
 # --- Expert Name Input ---
 st.markdown("### 🎯 Enter the EXACT Expert Role Title (as in the tender)")
 expert_name = st.text_input(
-    "Example: Key expert 1 (KE 1): Team leader Expert in Employment",
+    "Example: Key expert 1",
     placeholder="Enter the exact expert heading (case-insensitive)"
 )
 
 # --- FINAL Expert Section Extraction ---
 def extract_expert_section(full_text: str, expert_name: str) -> str:
     """
-    Extract one continuous expert block:
-    - Starts at the first occurrence of expert_name (e.g. 'Key Expert 1').
-    - Ends just before the next higher-numbered expert (Key Expert 2+).
-    - Ignores internal repeats of the same expert number.
+    Extract all 'Key Expert N' sections:
+    - Starts at each occurrence of the given expert name.
+    - Ends right before the next higher-numbered expert (Key Expert N+1).
+    - Joins all found blocks with a separator '---------------'.
     """
     if not full_text or not expert_name:
         return ""
 
+    # Normalize whitespace
     text = re.sub(r"\s+", " ", full_text)
 
-    # Detect which expert number is requested
-    num_match = re.search(r"\bKey\s*Expert\s*(\d+)\b|\bKE\s*(\d+)\b|\bExpert\s*(\d+)\b", expert_name, re.IGNORECASE)
-    current_num = None
-    if num_match:
-        current_num = int(next(n for n in num_match.groups() if n))
-    next_num = (current_num + 1) if current_num else 2
+    # Identify which expert number we’re extracting (default 1)
+    num_match = re.search(r"\bKey\s*Expert\s*(\d+)\b", expert_name, re.IGNORECASE)
+    current_num = int(num_match.group(1)) if num_match else 1
+    next_num = current_num + 1
 
-    # Find start
-    start_match = re.search(re.escape(expert_name), text, re.IGNORECASE)
-    if not start_match:
+    # Find all occurrences of this expert name
+    pattern_start = re.compile(re.escape(expert_name), re.IGNORECASE)
+    starts = [m.start() for m in pattern_start.finditer(text)]
+    if not starts:
         return ""
 
-    start_index = start_match.start()
-
-    # Stop only at the *next* expert number or higher
+    # Define where to stop (Key Expert next number)
     stop_pattern = re.compile(
-        rf"(?:Key\s*Expert\s*(?:{next_num}|[1-9]\d*)\b|KE\s*(?:{next_num}|[1-9]\d*)\b|Expert\s*(?:{next_num}|[1-9]\d*)\b|Non[-\s]*Key|General\s+Conditions|Terms|Reimbursement|END)",
+        rf"(?:(?<!\d)(?:Key|KE)?\s*Expert\s*{next_num}\b)",
         re.IGNORECASE,
     )
 
-    stop_match = stop_pattern.search(text, start_index)
-    end_index = start_index + stop_match.start() if stop_match else len(text)
+    sections = []
+    for s in starts:
+        stop_match = stop_pattern.search(text, s)
+        end_index = stop_match.start() if stop_match else len(text)
+        block = text[s:end_index].strip()
+        if block:
+            sections.append(block)
 
-    section = text[start_index:end_index]
-    section = re.sub(r"\s{2,}", " ", section).strip()
-    return section
+    # Join all sections with separator
+    return "\n\n---------------\n\n".join(sections)
 
 
 # --- Upload CVs ---
@@ -120,8 +122,8 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 f"--- SPECIFIC EXPERT REQUIREMENTS (80% weight) ---\n\n"
                 f"{expert_section}"
             )
-            st.success(f"✅ Extracted expert section for: {expert_name}")
-            st.text_area("📘 Preview of Extracted Expert Section", expert_section, height=600)
+            st.success(f"✅ Extracted expert section(s) for: {expert_name}")
+            st.text_area("📘 Preview of Extracted Expert Section", expert_section, height=700)
 
         # Assign requirements text for evaluation
         system.job_requirements = combined_text
@@ -167,4 +169,3 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
 else:
     if not expert_name.strip():
         st.warning("⚠️ Please enter the expert role title before running the assessment.")
-
