@@ -37,12 +37,12 @@ expert_name = st.text_input(
     placeholder="Enter exact expert role title (case-insensitive)"
 )
 
-# --- FINAL Expert Section Extraction ---
+# --- FINAL Expert Section Extraction (Annex-safe version) ---
 def extract_expert_section(full_text: str, expert_name: str) -> str:
     """
     Finds EVERY instance of the exact expert_name and extracts everything that follows
     until the next 'Key Expert 2', 'KE 2', 'Expert 2', or higher-numbered expert.
-    Ignores internal 'Expert in …' phrases inside the same block.
+    Ignores internal 'Expert in …' phrases and 'Annex' inside the same block.
     """
     if not full_text or not expert_name:
         return ""
@@ -50,9 +50,9 @@ def extract_expert_section(full_text: str, expert_name: str) -> str:
     # Normalize whitespace for cleaner regex behaviour
     text = re.sub(r"\s+", " ", full_text)
 
-    # --- STOP only at Key Expert 2 or higher ---
+    # --- STOP only at Key Expert 2 or higher (Annex removed) ---
     stop_pattern = re.compile(
-        r"(?:Key\s*Expert\s*[2-9]\b|KE\s*[2-9]\b|Expert\s+[2-9]\b|Non[-\s]*Key|Annex|General\s+Conditions|Terms|Reimbursement|END)",
+        r"(?:Key\s*Expert\s*[2-9]\b|KE\s*[2-9]\b|Expert\s+[2-9]\b|Non[-\s]*Key|General\s+Conditions|Terms|Reimbursement|END)",
         re.IGNORECASE,
     )
 
