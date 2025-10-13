@@ -53,158 +53,91 @@ expert_name = st.text_input(
 
 # ------------------- EXTRACTION FUNCTIONS -------------------
 
-def extract_expert_section(file_path: str, expert_name: str) -> str:
-    """Extract ALL occurrences of expert section from Word document"""
-    if not file_path or not expert_name:
+def extract_expert_section_llm(full_text: str, expert_name: str, api_key: str) -> str:
+    """Use LLM to intelligently extract expert section requirements"""
+    if not full_text or not expert_name or not api_key:
         return ""
-    
-    if not file_path.lower().endswith(('.docx', '.doc')):
-        return extract_from_text(tender_text, expert_name)
     
     try:
-        doc = Document(file_path)
-        all_sections = []  # Will hold multiple extracted sections
-        current_section = []
-        started = False
+        import openai
+        client = openai.OpenAI(api_key=api_key)
         
-        # Extract number from expert name
-        expert_num_match = re.search(r'(\d+)', expert_name)
-        my_number = expert_num_match.group(1) if expert_num_match else None
+        prompt = f"""You are analyzing a tender document to extract requirements for a specific expert position.
+
+EXPERT POSITION TO EXTRACT: "{expert_name}"
+
+Your task:
+1. Find ALL sections in the document that describe requirements, qualifications, responsibilities, or deliverables for this specific expert position
+2. Extract the COMPLETE text for this position, including:
+   - Job title and role description
+   - Required qualifications (education, certifications)
+   - Required experience (years, specific domains)
+   - Technical skills and competencies
+   - Responsibilities and tasks
+   - Deliverables and outputs expected
+   - Language requirements
+   - Any other relevant requirements
+
+IMPORTANT:
+- Extract ONLY information relevant to "{expert_name}"
+- Do NOT include information about other expert positions (e.g., if extracting Key Expert 1, exclude Key Expert 2, 3, etc.)
+- Do NOT include general project background, budget, or administrative sections
+- If the position appears in multiple places in the document, extract ALL occurrences
+- Preserve the original text as much as possible
+- If you find multiple sections, separate them with "---SECTION BREAK---"
+
+TENDER DOCUMENT:
+{full_text[:30000]}
+
+Return ONLY the extracted text for "{expert_name}". If nothing is found, return exactly: "NOT_FOUND"
+"""
         
-        def is_bold(para):
-            if not para.runs:
-                return False
-            bold_runs = sum(1 for r in para.runs if r.bold)
-            return bold_runs > len(para.runs) / 2
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a precise document extraction assistant. Extract only the requested content."
+                },
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,
+            max_tokens=4000
+        )
         
-        def is_different_expert(text):
-            if not my_number:
-                return False
-            matches = re.findall(r'(?:key\s+expert|expert|ke)\s*[:\-\(]?\s*(?:ke\s*)?(\d+)', text, re.IGNORECASE)
-            for found_num in matches:
-                if found_num != my_number:
-                    return True
-            return False
+        extracted = response.choices[0].message.content.strip()
         
-        def is_major_section(text):
-            """Check if this is a major document section break"""
-            text_lower = text.lower().strip()
-            major_keywords = [
-                'part b', 'part a', 'annex', 'background information', 
-                'contracting authority', 'location and duration', 
-                'reports and deliverables', 'tender specifications'
-            ]
-            return any(kw in text_lower for kw in major_keywords)
+        if extracted == "NOT_FOUND" or not extracted:
+            return ""
         
-        # Extract ALL occurrences
-        for para in doc.paragraphs:
-            text = para.text.strip()
-            if not text:
-                continue
-            
-            # Check if this starts our expert section (must be a header, not just a mention)
-            if expert_name.lower() in text.lower():
-                # SKIP if this line mentions OTHER experts too (like travel costs)
-                if is_different_expert(text):
-                    continue
-                
-                # Only start new section if this looks like a header/title
-                # (short line, or has colon, or is bold, or starts with the expert name)
-                is_header = (
-                    len(text) < 150 or  # Short lines are usually headers
-                    ':' in text or  # Has colon like "Key expert 1 (KE 1):"
-                    is_bold(para) or  # Bold text
-                    text.lower().startswith(expert_name.lower()[:10])  # Starts with expert name
-                )
-                
-                if is_header:
-                    # Save previous section if exists
-                    if current_section:
-                        all_sections.append(' '.join(current_section))
-                        current_section = []
-                    
-                    # Start new section
-                    started = True
-                    current_section.append(text)
-                    continue
-            
-            # If we're currently extracting
-            if started:
-                # STOP: Different expert
-                if is_different_expert(text):
-                    # Save this section
-                    if current_section:
-                        all_sections.append(' '.join(current_section))
-                        current_section = []
-                    started = False
-                    continue
-                
-                # STOP: Major section break (like Part B)
-                if is_bold(para) and is_major_section(text):
-                    # Save this section
-                    if current_section:
-                        all_sections.append(' '.join(current_section))
-                        current_section = []
-                    started = False
-                    continue
-                
-                # CONTINUE: Regular content
-                current_section.append(text)
+        # Replace section breaks with consistent separator
+        extracted = extracted.replace("---SECTION BREAK---", "\n\n" + "-"*60 + "\n\n")
         
-        # Add last section if exists
-        if current_section:
-            all_sections.append(' '.join(current_section))
-        
-        # Combine all sections with separator
-        if all_sections:
-            return '\n\n----------------------------------------------------------\n\n'.join(all_sections).strip()
-        
-        return ""
+        return extracted
     
     except Exception as e:
-        st.error(f"Extraction error: {e}")
+        st.error(f"LLM extraction error: {e}")
         return ""
-
-
-def extract_from_text(full_text: str, expert_name: str) -> str:
-    """Fallback: extract from plain text (for PDFs)"""
-    if not full_text or not expert_name:
-        return ""
-    
-    num_match = re.search(r'(\d+)', expert_name)
-    my_num = num_match.group(1) if num_match else None
-    
-    if my_num:
-        pattern = rf"({re.escape(expert_name)}.*?)(?=(?:key\s+expert|expert|ke)\s*[:\-\(]?\s*(?!{my_num})\d+|$)"
-    else:
-        pattern = rf"({re.escape(expert_name)}.*?)(?=expert\s+\d+|$)"
-    
-    match = re.search(pattern, full_text, re.IGNORECASE | re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    
-    return ""
 
 # ------------------- EXTRACT BUTTON -------------------
 
-extract_button = st.button("🔍 Extract Expert Section", disabled=not (req_file and expert_name.strip() and tender_path))
+st.info("💡 **AI Extraction**: The system will use GPT to intelligently identify and extract all requirements specific to your chosen expert position, automatically excluding other positions and irrelevant sections.")
+
+extract_button = st.button("🔍 Extract Expert Section (AI-Powered)", disabled=not (req_file and expert_name.strip() and tender_path and api_key))
 
 if extract_button:
-    with st.spinner("Extracting..."):        
-        if req_file.name.lower().endswith('.docx'):
-            expert_section = extract_expert_section(tender_path, expert_name)
-        else:
-            expert_section = extract_from_text(tender_text, expert_name)
+    with st.spinner("🤖 Using AI to intelligently extract requirements for this position..."):        
+        expert_section = extract_expert_section_llm(tender_text, expert_name, api_key)
         
         if expert_section:
             st.session_state.expert_section_text = expert_section
             # Count sections (separated by the long dashes)
-            num_sections = expert_section.count('----------------------------------------------------------') + 1
+            num_sections = expert_section.count('------------------------------------------------------------') + 1
             st.success(f"✅ Extracted {len(expert_section)} characters from {num_sections} section(s) for: {expert_name}")
-            st.info("Scroll down to see the extracted content in the text area below ⬇️")
+            st.info("📜 Scroll down to review the extracted content in the text area below ⬇️")
         else:
             st.session_state.expert_section_text = ""
-            st.warning("⚠️ Nothing found. Try different spelling or paste manually below.")
+            st.warning("⚠️ AI couldn't find specific requirements for this position. Try:\n- Different spelling (e.g., 'Key Expert 1' vs 'Expert 1')\n- Or paste content manually below")
 
 # ------------------- EDITABLE PREVIEW -------------------
 
@@ -301,7 +234,9 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
 # ------------------- WARNINGS -------------------
 
 else:
-    if not expert_name.strip():
+    if not api_key and not os.getenv("OPENAI_API_KEY"):
+        st.warning("⚠️ Enter OpenAI API key to enable AI extraction and assessment")
+    elif not expert_name.strip():
         st.warning("⚠️ Enter expert role title")
     elif not req_file:
         st.warning("⚠️ Upload tender file")
