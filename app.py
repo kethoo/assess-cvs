@@ -37,43 +37,40 @@ expert_name = st.text_input(
     placeholder="Enter exact expert role title (case-insensitive)"
 )
 
-# --- POWERFUL FINAL Expert Section Extraction ---
+# --- FINAL Expert Section Extraction ---
 def extract_expert_section(full_text: str, expert_name: str) -> str:
     """
-    Finds EVERY instance of the exact expert name and extracts full context
-    from each occurrence until just before 'Key Expert 2' or similar next expert section.
-    Returns the concatenation of all such sections.
+    Finds EVERY instance of the exact expert_name and extracts everything that follows
+    until the next 'Key Expert 2', 'KE 2', 'Expert 2', or higher-numbered expert.
+    Ignores internal 'Expert in …' phrases inside the same block.
     """
     if not full_text or not expert_name:
         return ""
 
-    # Normalize text (remove redundant spaces)
+    # Normalize whitespace for cleaner regex behaviour
     text = re.sub(r"\s+", " ", full_text)
 
-    # Pattern for next expert marker
+    # --- STOP only at Key Expert 2 or higher ---
     stop_pattern = re.compile(
-        r"(Key\s*Expert\s*2|KE\s*2|Expert\s+2|Non[-\s]*Key|Annex|General\s+Conditions|Terms|Reimbursement|END)",
+        r"(?:Key\s*Expert\s*[2-9]\b|KE\s*[2-9]\b|Expert\s+[2-9]\b|Non[-\s]*Key|Annex|General\s+Conditions|Terms|Reimbursement|END)",
         re.IGNORECASE,
     )
 
-    # Find all exact matches of the expert name (case-insensitive)
-    start_iter = [m.start() for m in re.finditer(re.escape(expert_name), text, re.IGNORECASE)]
-    if not start_iter:
+    # --- Find all occurrences of the expert name ---
+    starts = [m.start() for m in re.finditer(re.escape(expert_name), text, re.IGNORECASE)]
+    if not starts:
         return ""
 
     sections = []
-    for start_index in start_iter:
-        # Find the next stop marker *after* this start index
-        stop_match = stop_pattern.search(text, start_index)
-        end_index = stop_match.start() if stop_match else len(text)
+    for s in starts:
+        # Find next stop marker after this start
+        stop = stop_pattern.search(text, s)
+        end = stop.start() if stop else len(text)
+        part = text[s:end].strip()
+        if part:
+            sections.append(part)
 
-        # Slice out the section
-        section = text[start_index:end_index]
-        section = re.sub(r"\s{2,}", " ", section).strip()
-        if section:
-            sections.append(section)
-
-    # Combine all found sections
+    # Join all found sections
     return "\n\n---\n\n".join(sections)
 
 
@@ -90,6 +87,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
         cv_folder = os.path.join(tmpdir, "cvs")
         os.makedirs(cv_folder, exist_ok=True)
 
+        # Save uploaded CVs
         for file in cv_files:
             path = os.path.join(cv_folder, file.name)
             with open(path, "wb") as f:
