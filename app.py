@@ -34,35 +34,47 @@ if req_file:
 st.markdown("### 🎯 Enter the Expert Role Title (exactly as in the tender file)")
 expert_name = st.text_input(
     "Example: Team Leader, International Expert",
-    placeholder="Enter the expert role title or partial match (e.g., 'Key Expert 1', 'Procurement Expert')"
+    placeholder="Enter the exact expert role title (case-insensitive match)"
 )
 
-
-# --- Enhanced Expert Section Extraction ---
+# --- Improved Expert Section Extraction ---
 def extract_expert_section(full_text: str, expert_name: str) -> str:
     """
-    Extracts ALL text sections for a specific expert, including both table and paragraph content.
-    Handles multiple appearances and formatting variants.
+    Extracts the complete section(s) for a specific expert (e.g., Key Expert 1, Team Leader).
+    Includes tables, qualifications, and multi-line paragraphs.
+    Captures everything until the next expert block or the end of the document.
     """
     if not full_text or not expert_name:
         return ""
 
-    # Flexible pattern: stops at the next expert or annex section
+    # Normalize for consistent matching
+    text = re.sub(r"\s+", " ", full_text)
+
+    # Main pattern: starts from Key Expert with the specified name, until next section
     pattern = re.compile(
-        rf"({re.escape(expert_name)}.*?)(?=(?:Key\s*Expert\s*\d|KE\s*\d|Expert\s+in|Non[-\s]*Key|Annex|General\s+Conditions|Terms|END|$))",
+        rf"((?:Key\s*Expert\s*\d.*?{re.escape(expert_name)}.*?)(?=(?:Key\s*Expert\s*\d|KE\s*\d|Non[-\s]*Key|Annex|General\s+Conditions|Terms|END|$)))",
         re.IGNORECASE | re.DOTALL,
     )
 
-    matches = pattern.findall(full_text)
+    matches = pattern.findall(text)
+
+    # Fallback pattern if no Key Expert prefix is found
+    if not matches:
+        pattern_alt = re.compile(
+            rf"({re.escape(expert_name)}.*?)(?=(?:Key\s*Expert\s*\d|KE\s*\d|Non[-\s]*Key|Annex|General\s+Conditions|Terms|END|$))",
+            re.IGNORECASE | re.DOTALL,
+        )
+        matches = pattern_alt.findall(text)
 
     if matches:
-        sections = []
+        cleaned_sections = []
         for section in matches:
-            section = re.sub(r"\n{2,}", "\n", section)
             section = re.sub(r"\s{2,}", " ", section)
-            sections.append(section.strip())
-        # Join multiple occurrences with separator
-        return "\n\n---\n\n".join(sections)
+            section = re.sub(r"\n{2,}", "\n", section)
+            cleaned_sections.append(section.strip())
+
+        # Combine all found blocks (if multiple)
+        return "\n\n---\n\n".join(cleaned_sections)
 
     return ""
 
