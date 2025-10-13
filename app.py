@@ -2,6 +2,7 @@ import streamlit as st
 import tempfile
 import os
 from cv_assessment import CVAssessmentSystem
+from main import process_cv_folder
 
 st.set_page_config(page_title="CV Assessor", layout="wide")
 st.title("📄 CV Assessment Tool")
