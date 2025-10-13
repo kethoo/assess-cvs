@@ -117,8 +117,13 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 f"{expert_section}"
             )
             st.success(f"✅ Extracted expert section for: {expert_name}")
-            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:2500], height=250)
-
+            expert_section_editable = st.text_area(
+                "📘 Preview & Edit Extracted Expert Section",
+                expert_section,
+                height=350,
+                help="You can edit this section before running the assessment."
+            )
+            expert_section = expert_section_editable.strip()
         # ------------------- RUN ASSESSMENTS -------------------
 
         system.job_requirements = combined_text
