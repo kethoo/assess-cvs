@@ -87,58 +87,107 @@ class CVAssessmentSystem:
         return "\n".join(text)
 
     def _extract_text_from_word(self, file_path: str) -> str:
-        """Extract full text from a Word (.docx) file including tables, text boxes, and nested items."""
+        """Extract text from Word document, preserving tables and merging broken lines."""
         from docx import Document
-        from docx.oxml.table import CT_Tbl
-        from docx.oxml.text.paragraph import CT_P
-        import itertools
-    
         doc = Document(file_path)
+        lines = []
     
-        def iter_block_items(parent):
-            """Yield paragraphs and tables in document order (recursively for nested tables)."""
-            for child in parent.element.body.iterchildren():
-                if isinstance(child, CT_P):
-                    yield parent.paragraphs[len(list(itertools.takewhile(lambda p: p._p is not child, parent.paragraphs)))]
-                elif isinstance(child, CT_Tbl):
-                    yield parent.tables[len(list(itertools.takewhile(lambda t: t._tbl is not child, parent.tables)))]
+        # --- Read all paragraphs ---
+        for p in doc.paragraphs:
+            text = p.text.strip()
+            if text:
+                lines.append(text)
     
-        def get_text_from_cell(cell):
-            parts = []
-            for paragraph in cell.paragraphs:
-                if paragraph.text.strip():
-                    parts.append(paragraph.text.strip())
-            for table in cell.tables:
-                parts.append(get_text_from_table(table))
-            return " ".join(parts)
-    
-        def get_text_from_table(table):
-            rows_text = []
+        # --- Read all tables (flattened row by row) ---
+        for table in doc.tables:
             for row in table.rows:
-                row_text = " ".join(get_text_from_cell(c) for c in row.cells if c.text.strip())
+                row_text = " ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
                 if row_text:
-                    rows_text.append(row_text)
-            return " ".join(rows_text)
+                    lines.append(row_text)
     
-        text_blocks = []
-        for block in iter_block_items(doc):
-            if isinstance(block, type(doc.paragraphs[0])):
-                if block.text.strip():
-                    text_blocks.append(block.text.strip())
-            elif isinstance(block, type(doc.tables[0])):
-                table_text = get_text_from_table(block)
-                if table_text:
-                    text_blocks.append(table_text)
+        # --- Merge lines intelligently ---
+        merged = []
+        buffer = ""
+        for line in lines:
+            # join broken lines (no punctuation and short fragments)
+            if len(line) < 100 and not line.endswith((".", ":", ";")):
+                buffer += " " + line
+            else:
+                buffer += " " + line
+                merged.append(buffer.strip())
+                buffer = ""
+        if buffer:
+            merged.append(buffer.strip())
     
-        # Clean and merge
-        text = " ".join(text_blocks)
+        # --- Clean up double spaces and broken hyphens ---
+        text = "\n".join(merged)
         text = re.sub(r"\s{2,}", " ", text)
         text = re.sub(r"(\w)-\s+(\w)", r"\1\2", text)
-        return text.strip()
     
-        
-        
+        return text.strip()
 
+    # ------------------- BOLD-BASED EXPERT EXTRACTION -------------------
+
+    def extract_expert_sections_by_bold(self, docx_path: str, target_expert_name: str) -> str:
+        """
+        Extracts a section starting from a bold 'Key Expert X' or 'KE X' heading
+        until the next bold expert header or document end.
+        Used as a fallback if normal regex extraction fails.
+        """
+        try:
+            doc = Document(docx_path)
+        except Exception as e:
+            return f"⚠️ Could not open document: {e}"
+
+        # Normalize expert name
+        target_expert_name = (
+            target_expert_name.lower()
+            .replace("(", "")
+            .replace(")", "")
+            .strip()
+        )
+
+        # Extract expert number
+        num_match = re.search(r"(?:key\s*expert\s*|ke\s*)(\d+)", target_expert_name, re.IGNORECASE)
+        current_num = int(num_match.group(1)) if num_match else 1
+        next_num = current_num + 1
+
+        sections = []
+        capture = False
+        buffer = []
+
+        for para in doc.paragraphs:
+            para_text = para.text.strip()
+            if not para_text:
+                continue
+
+            # Detect start of current expert
+            if re.search(rf"(?i)(key\s*expert\s*{current_num}\b|ke\s*{current_num}\b)", para_text):
+                capture = True
+                buffer = [para_text]
+                continue
+
+            # Detect next expert header -> stop
+            if capture and re.search(
+                rf"(?i)(key\s*expert\s*(?:{next_num}|[1-9]\d*)\b|ke\s*(?:{next_num}|[1-9]\d*)\b|non[-\s]*key|annex|general\s+conditions)",
+                para_text,
+            ):
+                sections.append(" ".join(buffer).strip())
+                buffer = []
+                capture = False
+                continue
+
+            if capture:
+                buffer.append(para_text)
+
+        if buffer:
+            sections.append(" ".join(buffer).strip())
+
+        clean_sections = [s for s in sections if len(s) > 40]
+        if not clean_sections:
+            return "⚠️ No bold-based expert sections detected."
+
+        return "\n\n---------------\n\n".join(clean_sections)
 
     # ------------------- STRUCTURED (DASHBOARD) MODE -------------------
 
@@ -222,7 +271,6 @@ CANDIDATE CV:
 
     def _assess_candidate_critical(self, filename: str, cv_text: str) -> Dict[str, Any]:
         """Critical narrative evaluation with semantic donor detection, regex fallback, and dynamic donor context."""
-
         # ---------- 1️⃣ Semantic donor detection ----------
         donor_query = f"""
         Identify the main funding organization mentioned or implied in this tender.
@@ -246,12 +294,12 @@ CANDIDATE CV:
         # ---------- 2️⃣ Regex fallback ----------
         text_lower = self.job_requirements.lower()
         donors = {
-            "World Bank": r"\b(world\s*bank|wbg|ifc|ida|ibrd)\b",
-            "European Union": r"\b(european\s*union|eu\s+delegation|europeaid|neighbourhood|dg\s*intl)\b",
-            "Asian Development Bank": r"\b(asian\s+development\s+bank|adb)\b",
-            "USAID": r"\b(usaid|united\s+states\s+agency\s+for\s+international\s+development)\b",
-            "African Development Bank": r"\b(african\s+development\s+bank|afdb)\b",
-            "UNDP": r"\b(undp|united\s+nations\s+development\s+programme)\b",
+            "World Bank": r"\b(world\\s*bank|wbg|ifc|ida|ibrd)\b",
+            "European Union": r"\b(european\\s*union|eu\\s+delegation|europeaid|neighbourhood|dg\\s*intl)\b",
+            "Asian Development Bank": r"\b(asian\\s+development\\s+bank|adb)\b",
+            "USAID": r"\b(usaid|united\\s+states\\s+agency\\s+for\\s+international\\s+development)\b",
+            "African Development Bank": r"\b(african\\s+development\\s+bank|afdb)\b",
+            "UNDP": r"\b(undp|united\\s+nations\\s+development\\s+programme)\b",
         }
         if donor_match == "Unknown":
             for name, pattern in donors.items():
@@ -318,9 +366,9 @@ Provide 5–10 recommended keyword alignments using {donor_match} phrasing.
 
 | Current CV Wording | Recommended {donor_match} Keyword | Why |
 |--------------------|----------------------------------|-----|
-| "Project manager" | "Implementation support consultant under {donor_match} framework" | Aligns with {donor_match} terminology. |
-| "Drafted reports" | "Prepared deliverables per {donor_match} quality control protocols" | Matches donor QA phrasing. |
-| "Policy development" | "Institutional reform and capacity-building support" | Fits {donor_match} operational tone. |
+| \"Project manager\" | \"Implementation support consultant under {donor_match} framework\" | Aligns with {donor_match} terminology. |
+| \"Drafted reports\" | \"Prepared deliverables per {donor_match} quality control protocols\" | Matches donor QA phrasing. |
+| \"Policy development\" | \"Institutional reform and capacity-building support\" | Fits {donor_match} operational tone. |
 
 ---
 
@@ -353,12 +401,12 @@ Provide 5–10 recommended keyword alignments using {donor_match} phrasing.
             )
 
             report_text = response.choices[0].message.content.strip()
-            match = re.search(r"Final Weighted Score.*?([0-9]\.[0-9]+)", report_text)
+            match = re.search(r"Final Weighted Score.*?([0-9]\\.[0-9]+)", report_text)
             final_score = float(match.group(1)) if match else 0.0
 
             return {
                 "candidate_name": filename,
-                "report": f"**Detected Donor Context:** {donor_match}\n\n" + report_text,
+                "report": f"**Detected Donor Context:** {donor_match}\\n\\n" + report_text,
                 "final_score": final_score,
             }
 
@@ -376,7 +424,7 @@ Provide 5–10 recommended keyword alignments using {donor_match} phrasing.
         content = content.strip()
         content = re.sub(r"^```(json)?", "", content)
         content = re.sub(r"```$", "", content)
-        match = re.search(r"(\{.*\})", content, re.DOTALL)
+        match = re.search(r"(\\{.*\\})", content, re.DOTALL)
         if match:
             return match.group(1).strip()
         return content
