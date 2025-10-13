@@ -17,7 +17,7 @@ class CVAssessmentSystem:
 
         try:
             if ext == ".docx":
-                # Extract plain text (used for regex fallback)
+                # Extract plain text for fallback / regex searches
                 with open(file_path, "rb") as f:
                     result = mammoth.extract_raw_text(f)
                 return result.value
@@ -40,54 +40,57 @@ class CVAssessmentSystem:
     # --- BOLD-BASED SECTION EXTRACTOR ---
     def extract_expert_sections_by_bold(self, docx_path, target_expert_name):
         """
-        Extracts text between bold headings in a DOCX tender.
+        Extracts all sections starting with bold headings matching the target expert.
+        Each separate occurrence is separated by ---------------.
+
         Example:
-            From 'Key Expert 1' up to (but not including) 'Key Expert 2'.
+            - Finds all bold 'Key Expert 2' headings
+            - Captures all text until the next bold heading (any expert)
+            - Joins multiple results with a separator
         """
         try:
             doc = Document(docx_path)
         except Exception as e:
             return f"⚠️ Could not open document: {e}"
 
+        target_expert_name = target_expert_name.lower().strip()
         sections = []
         current_section = []
         capture = False
-        target_expert_name = target_expert_name.lower().strip()
 
         for para in doc.paragraphs:
             text = para.text.strip()
             if not text:
                 continue
 
-            # Detect if paragraph has bold text
+            # Detect bold paragraphs
             is_bold = any(run.bold for run in para.runs if run.text.strip())
 
-            # Detect Key Expert headings
             if is_bold and "key expert" in text.lower():
-                # If already capturing, finish previous section
+                # Starting a new bold heading
                 if capture:
+                    # Close previous section when we reach ANY bold Key Expert
                     sections.append(" ".join(current_section).strip())
                     current_section = []
                     capture = False
 
-                # Start capturing if it's the target expert
+                # Start new capture if matches target expert
                 if target_expert_name in text.lower():
                     capture = True
                     current_section.append(text)
-                else:
-                    # Stop if another expert heading appears
-                    if capture:
-                        break
+                # If it's a different Key Expert and we were capturing, stop
+                elif capture:
+                    break
             elif capture:
                 current_section.append(text)
 
-        # Add the final section if still capturing
+        # Add final section if still open
         if current_section:
             sections.append(" ".join(current_section).strip())
 
+        # --- 🔹 Join multiple sections cleanly ---
         if not sections:
             return ""
-
         return "\n\n---------------\n\n".join(sections)
 
     # --- CV PROCESSING (SIMPLIFIED PLACEHOLDER) ---
