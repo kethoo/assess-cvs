@@ -33,50 +33,41 @@ if req_file:
 # --- Expert Name Input ---
 st.markdown("### 🎯 Enter the Expert Role Title (exactly as in the tender file)")
 expert_name = st.text_input(
-    "Example: Team Leader, International Expert",
+    "Example: Team leader Expert in Employment",
     placeholder="Enter the exact expert role title (case-insensitive match)"
 )
 
-# --- Improved Expert Section Extraction ---
+# --- STRONG FINAL Expert Section Extraction ---
 def extract_expert_section(full_text: str, expert_name: str) -> str:
     """
-    Extracts the complete section(s) for a specific expert (e.g., Key Expert 1, Team Leader).
-    Includes tables, qualifications, and multi-line paragraphs.
-    Captures everything until the next expert block or the end of the document.
+    Extracts the complete text block starting from the exact expert name given,
+    including all details (general description, qualifications, experience, etc.)
+    until the next expert section or the end of the document.
     """
     if not full_text or not expert_name:
         return ""
 
-    # Normalize for consistent matching
+    # Normalize whitespace for cleaner regex behavior
     text = re.sub(r"\s+", " ", full_text)
 
-    # Main pattern: starts from Key Expert with the specified name, until next section
+    # Regex pattern: start exactly at the expert name, continue until next section marker
     pattern = re.compile(
-        rf"((?:Key\s*Expert\s*\d.*?{re.escape(expert_name)}.*?)(?=(?:Key\s*Expert\s*\d|KE\s*\d|Non[-\s]*Key|Annex|General\s+Conditions|Terms|END|$)))",
+        rf"({re.escape(expert_name)}.*?)(?=(?:Key\s*Expert\s*\d|KE\s*\d|Expert\s+in\s+\w+|Non[-\s]*Key|Annex|General\s+Conditions|Terms|Reimbursement|END|$))",
         re.IGNORECASE | re.DOTALL,
     )
 
     matches = pattern.findall(text)
 
-    # Fallback pattern if no Key Expert prefix is found
     if not matches:
-        pattern_alt = re.compile(
-            rf"({re.escape(expert_name)}.*?)(?=(?:Key\s*Expert\s*\d|KE\s*\d|Non[-\s]*Key|Annex|General\s+Conditions|Terms|END|$))",
-            re.IGNORECASE | re.DOTALL,
-        )
-        matches = pattern_alt.findall(text)
+        return ""
 
-    if matches:
-        cleaned_sections = []
-        for section in matches:
-            section = re.sub(r"\s{2,}", " ", section)
-            section = re.sub(r"\n{2,}", "\n", section)
-            cleaned_sections.append(section.strip())
+    sections = []
+    for section in matches:
+        section = re.sub(r"\s{2,}", " ", section)
+        section = re.sub(r"\n{2,}", "\n", section)
+        sections.append(section.strip())
 
-        # Combine all found blocks (if multiple)
-        return "\n\n---\n\n".join(cleaned_sections)
-
-    return ""
+    return "\n\n---\n\n".join(sections)
 
 
 # --- Upload CVs ---
@@ -117,7 +108,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 f"{expert_section}"
             )
             st.success(f"✅ Extracted expert section for: {expert_name}")
-            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:2500], height=250)
+            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:3000], height=300)
 
         # Assign requirements text for evaluation
         system.job_requirements = combined_text
