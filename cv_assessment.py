@@ -15,7 +15,8 @@ from models import CandidateAssessment
 class CVAssessmentSystem:
     def __init__(self, api_key: str = None):
         """Initialize the CV assessment system"""
-        self.client = openai.OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        from openai import OpenAI
+        self.client = OpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
         self.job_requirements = ""
         self.assessments: List[Any] = []
         self.session_id = f"assessment_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
