@@ -70,16 +70,16 @@ class CVAssessmentSystem:
                 new_expert_match = next_expert_pattern.search(text)
                 if new_expert_match:
                     new_num = new_expert_match.group(1)
-                    # different expert detected → end right before it
                     if not current_expert_num or new_num != current_expert_num:
-                        # trim the paragraph so we don’t include Key Expert 2 text
-                        cutoff = re.split(r"(?=Key\s*Expert\s*\d+|KE\s*\d+)", text, 1)[0].strip()
-                        if cutoff:
-                            current_section.append(cutoff)
+                        # hard stop: split at the new expert keyword and keep only text before it
+                        parts = re.split(r"(?=Key\\s*Expert\\s*\\d+|KE\\s*\\d+)", text, maxsplit=1, flags=re.IGNORECASE)
+                        if parts and parts[0].strip():
+                            current_section.append(parts[0].strip())
                         sections.append(" ".join(current_section).strip())
                         current_section = []
                         capture = False
                         continue
+
     
                 # 2️⃣ stop when an unrelated bold heading appears
                 if is_bold_heading and not expert_pattern.search(text):
