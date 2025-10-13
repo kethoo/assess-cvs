@@ -3,6 +3,7 @@ from cv_assessment import CVAssessmentSystem
 import tempfile
 import os
 import re
+from docx import Document
 
 # ------------------- STREAMLIT CONFIG -------------------
 
@@ -21,6 +22,7 @@ mode = st.radio("Select Evaluation Mode:", ["Structured (Dashboard)", "Critical 
 
 req_file = st.file_uploader("📄 Upload Tender / Job Description", type=["pdf", "docx", "doc"])
 tender_text = ""
+tender_path = None
 
 if req_file:
     suffix = os.path.splitext(req_file.name)[1] or ".pdf"
@@ -39,8 +41,8 @@ if req_file:
 
 st.markdown("### 🎯 Enter the Expert Role Title (exactly as in the tender file)")
 expert_name = st.text_input(
-    "Example: Team Leader, International Expert",
-    placeholder="Enter the expert role title or partial match (e.g., 'Key Expert 1', 'Procurement Expert')"
+    "Example: Key Expert 1, Team Leader",
+    placeholder="Enter the expert role title (e.g., 'Key Expert 1', 'Expert 2', 'KE 3')"
 )
 
 # ------------------- SESSION STATE INITIALIZATION -------------------
@@ -50,48 +52,233 @@ if 'extracted_section' not in st.session_state:
 if 'section_extracted' not in st.session_state:
     st.session_state.section_extracted = False
 
-# ------------------- REGEX-BASED EXTRACTION FUNCTION -------------------
+# ------------------- INTELLIGENT STRUCTURE-AWARE EXTRACTION -------------------
 
-def extract_expert_section(full_text: str, expert_name: str) -> str:
+def extract_expert_section_with_structure(file_path: str, expert_name: str) -> str:
     """
-    Extracts the full text for a specific expert, including both table and paragraph content.
-    Handles multiple formatting styles using regex.
+    Extract expert section from Word document with intelligent structure detection.
+    - Starts from the specified expert
+    - Adds separators (----) when encountering bold sections WITHIN the expert
+    - Stops at: next numbered expert OR (if last expert) bold section indicating new document part
+    """
+    if not file_path or not expert_name:
+        return ""
+    
+    # Only works with Word documents for now
+    if not file_path.lower().endswith(('.docx', '.doc')):
+        return extract_expert_section_fallback(tender_text, expert_name)
+    
+    try:
+        doc = Document(file_path)
+        extracted_parts = []
+        started = False
+        current_section = []
+        found_next_expert = False
+        
+        # Regex to detect other numbered experts (to know when to stop)
+        expert_pattern = re.compile(
+            r'\b(Key\s*Expert|Expert|KE|Non[-\s]*Key\s*Expert)\s*[#\-]?\s*(\d+|[IVX]+)\b',
+            re.IGNORECASE
+        )
+        
+        # Bold sections that indicate END of document sections (not part of expert description)
+        end_section_keywords = [
+            'annex', 'annexe', 'general conditions', 'terms and conditions', 
+            'terms of reference', 'appendix', 'attachment', 'payment terms',
+            'contract', 'award criteria', 'submission', 'deadline', 'evaluation',
+            'administrative', 'technical specifications', 'deliverables'
+        ]
+        
+        # Bold sections that are PART OF expert descriptions (should continue)
+        expert_description_keywords = [
+            'qualifications', 'education', 'experience', 'skills', 'responsibilities',
+            'tasks', 'duties', 'requirements', 'competencies', 'expertise',
+            'knowledge', 'languages', 'language', 'background', 'role', 'objective'
+        ]
+        
+        # Extract the number from the target expert name
+        target_match = re.search(r'(\d+|[IVX]+)', expert_name)
+        target_number = target_match.group(1) if target_match else None
+        
+        def is_bold(paragraph):
+            """Check if paragraph has bold text"""
+            if not paragraph.runs:
+                return False
+            # Check if majority of runs are bold
+            bold_runs = sum(1 for run in paragraph.runs if run.bold)
+            return bold_runs > len(paragraph.runs) / 2
+        
+        def is_different_expert(text):
+            """Check if this is a different numbered expert"""
+            match = expert_pattern.search(text)
+            if match and target_number:
+                found_number = match.group(2)
+                # Different expert number found
+                return found_number != target_number
+            return False
+        
+        def is_end_section(text):
+            """Check if this bold text indicates end of expert sections"""
+            text_lower = text.lower()
+            return any(keyword in text_lower for keyword in end_section_keywords)
+        
+        def is_expert_description(text):
+            """Check if this bold text is part of expert description"""
+            text_lower = text.lower()
+            return any(keyword in text_lower for keyword in expert_description_keywords)
+        
+        # First pass: check if there's another expert after this one
+        all_paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+        start_index = -1
+        
+        for i, text in enumerate(all_paragraphs):
+            if expert_name.lower() in text.lower():
+                start_index = i
+                break
+        
+        if start_index >= 0:
+            # Look ahead to see if there's another expert
+            for text in all_paragraphs[start_index + 1:]:
+                if is_different_expert(text):
+                    found_next_expert = True
+                    break
+        
+        # Now do the actual extraction
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            if not text:
+                continue
+            
+            # Check if we should start
+            if not started:
+                if expert_name.lower() in text.lower():
+                    started = True
+                    current_section.append(text)
+                continue
+            
+            # Check stopping conditions
+            if started:
+                # STOP CONDITION 1: Another numbered expert
+                if is_different_expert(text):
+                    break
+                
+                # STOP CONDITION 2: If this is the LAST expert and we hit an end-section bold
+                if not found_next_expert and is_bold(para) and is_end_section(text):
+                    break
+                
+                # Check if this is a bold section
+                if is_bold(para):
+                    # If it's part of expert description, add with separator
+                    if is_expert_description(text) or len(text.split()) <= 5:  # Short bold headers are usually section titles
+                        # Save previous section
+                        if current_section:
+                            extracted_parts.append('\n'.join(current_section))
+                            current_section = []
+                        
+                        # Add separator and bold section
+                        extracted_parts.append('\n----------------------------\n')
+                        extracted_parts.append(text)
+                    else:
+                        # Unknown bold text - include it but check next iteration
+                        current_section.append(text)
+                else:
+                    current_section.append(text)
+        
+        # Add any remaining content
+        if current_section:
+            extracted_parts.append('\n'.join(current_section))
+        
+        # Also check tables
+        for table in doc.tables:
+            table_started = False
+            table_text = []
+            
+            for row in table.rows:
+                row_text = ' | '.join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                
+                if not table_started:
+                    if expert_name.lower() in row_text.lower():
+                        table_started = True
+                        table_text.append(row_text)
+                    continue
+                
+                if table_started:
+                    # Check if we hit another expert
+                    if is_different_expert(row_text):
+                        break
+                    # Check if we hit end section (last expert)
+                    if not found_next_expert and is_end_section(row_text):
+                        break
+                    table_text.append(row_text)
+            
+            if table_text and started:
+                extracted_parts.append('\n----------------------------\n')
+                extracted_parts.append('TABLE CONTENT:')
+                extracted_parts.extend(table_text)
+        
+        result = '\n\n'.join(extracted_parts)
+        return result.strip() if result else ""
+    
+    except Exception as e:
+        print(f"Error in structure-aware extraction: {e}")
+        return extract_expert_section_fallback(tender_text, expert_name)
+
+
+def extract_expert_section_fallback(full_text: str, expert_name: str) -> str:
+    """
+    Fallback regex-based extraction for PDFs or when structure extraction fails
     """
     if not full_text or not expert_name:
         return ""
 
-    # Stops at next expert, annex, or general section
-    pattern = re.compile(
-        rf"({re.escape(expert_name)}.*?)(?=(?:Key\s*Expert\s*\d|KE\s*\d|Expert\s+in|Non[-\s]*Key|Annex|General\s+Conditions|Terms|END|$))",
-        re.IGNORECASE | re.DOTALL,
-    )
+    # Extract number from expert name
+    target_match = re.search(r'(\d+|[IVX]+)', expert_name)
+    target_number = target_match.group(1) if target_match else None
+    
+    # Create pattern that stops at next numbered expert OR end sections
+    if target_number:
+        # Match the target expert, capture everything until next numbered expert or end section
+        pattern = re.compile(
+            rf"({re.escape(expert_name)}.*?)(?=(?:Key\s*Expert|Expert|KE|Non[-\s]*Key)\s*[#\-]?\s*(?!{re.escape(target_number)})\d+|Annex|Annexe|General\s+Conditions|Terms\s+and\s+Conditions|Appendix|END|$)",
+            re.IGNORECASE | re.DOTALL,
+        )
+    else:
+        # No number found, use original pattern
+        pattern = re.compile(
+            rf"({re.escape(expert_name)}.*?)(?=(?:Key\s*Expert\s*\d|KE\s*\d|Expert\s+in|Non[-\s]*Key|Annex|General\s+Conditions|Terms|END|$))",
+            re.IGNORECASE | re.DOTALL,
+        )
 
     match = pattern.search(full_text)
     if match:
         section = match.group(1)
         # Clean spacing
-        section = re.sub(r"\n{2,}", "\n", section)
-        section = re.sub(r"\s{2,}", " ", section)
+        section = re.sub(r"\n{3,}", "\n\n", section)
+        section = re.sub(r"  +", " ", section)
         return section.strip()
 
     return ""
 
 # ------------------- EXTRACT EXPERT SECTION BUTTON -------------------
 
-if st.button("🔍 Extract Expert Section", disabled=not (req_file and expert_name.strip())):
-    with st.spinner("Extracting expert section..."):
-        # Initialize system for potential bold-based extraction
-        system = CVAssessmentSystem(api_key=api_key or None)
+if st.button("🔍 Extract Expert Section", disabled=not (req_file and expert_name.strip() and tender_path)):
+    with st.spinner("Extracting expert section with structure detection..."):
         
-        # PRIMARY EXTRACTION (REGEX)
-        expert_section = extract_expert_section(tender_text, expert_name)
-        
-        # FALLBACK: BOLD-BASED LOGIC
-        if not expert_section and req_file.name.lower().endswith(".docx"):
-            bold_extraction = system.extract_expert_sections_by_bold(tender_path, expert_name)
-            if bold_extraction and not bold_extraction.startswith("⚠️"):
-                expert_section = bold_extraction
-                st.info("🟨 Expert section extracted using bold-based logic (fallback mode).")
+        # Try structure-aware extraction for Word docs
+        if req_file.name.lower().endswith('.docx'):
+            expert_section = extract_expert_section_with_structure(tender_path, expert_name)
+            if expert_section:
+                st.info("✅ Extracted using structure-aware method (bold sections preserved with separators)")
+            else:
+                # Fallback to regex
+                expert_section = extract_expert_section_fallback(tender_text, expert_name)
+                if expert_section:
+                    st.info("🟨 Extracted using regex fallback method")
+        else:
+            # For PDFs, use regex method
+            expert_section = extract_expert_section_fallback(tender_text, expert_name)
+            if expert_section:
+                st.info("📄 Extracted from PDF using text-based method")
         
         # Store in session state
         if expert_section:
@@ -101,19 +288,19 @@ if st.button("🔍 Extract Expert Section", disabled=not (req_file and expert_na
         else:
             st.session_state.extracted_section = ""
             st.session_state.section_extracted = False
-            st.warning("⚠️ Could not precisely locate that expert section. You can manually enter/paste it below, or the full tender will be used as fallback.")
+            st.warning("⚠️ Could not locate that expert section. You can manually paste it below, or the full tender will be used.")
 
 # ------------------- EDITABLE PREVIEW SECTION -------------------
 
 if req_file and expert_name.strip():
     st.markdown("### 📝 Expert Section Preview & Edit")
-    st.markdown("*You can review and edit the extracted section below before running the assessment:*")
+    st.markdown("*Review and edit the extracted section. Bold sections within the expert are separated with dashes (---):*")
     
     edited_section = st.text_area(
         "Expert Section Content (editable)",
         value=st.session_state.extracted_section,
         height=400,
-        help="This section will be used with 80% weight in the assessment. Edit as needed.",
+        help="This section will be used with 80% weight. Edit as needed. Separators (----) mark different subsections within the expert profile.",
         key="expert_section_editor"
     )
     
@@ -121,7 +308,8 @@ if req_file and expert_name.strip():
     st.session_state.extracted_section = edited_section
     
     if edited_section:
-        st.info(f"📊 Section length: {len(edited_section)} characters")
+        separator_count = edited_section.count('----------------------------')
+        st.info(f"📊 Section length: {len(edited_section)} characters | Subsections: {separator_count + 1}")
 
 # ------------------- UPLOAD CVS -------------------
 
