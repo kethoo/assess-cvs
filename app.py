@@ -104,6 +104,10 @@ def extract_expert_section(file_path: str, expert_name: str) -> str:
             
             # Check if this starts our expert section (must be a header, not just a mention)
             if expert_name.lower() in text.lower():
+                # SKIP if this line mentions OTHER experts too (like travel costs)
+                if is_different_expert(text):
+                    continue
+                
                 # Only start new section if this looks like a header/title
                 # (short line, or has colon, or is bold, or starts with the expert name)
                 is_header = (
