@@ -1,123 +1,225 @@
-import streamlit as st
-import tempfile
 import os
-from cv_assessment import CVAssessmentSystem
+import re
+import mammoth
+from docx import Document
+from openai import OpenAI
 
-# --- Streamlit page setup ---
-st.set_page_config(page_title="CV Assessor", layout="wide")
-st.title("📄 CV Assessment Tool")
+class CVAssessmentSystem:
+    def __init__(self, api_key=None):
+        self.api_key = api_key
+        self.client = OpenAI(api_key=api_key) if api_key else None
+        self.job_requirements = None
 
-# --- Initialize session state ---
-if "expert_section" not in st.session_state:
-    st.session_state.expert_section = ""
+    # --- LOAD JOB REQUIREMENTS ---
+    def load_job_requirements(self, file_path):
+        """
+        Loads tender/job description text.
+        Uses mammoth for .docx, PyPDF2 for .pdf, and plain read for .txt/.doc.
+        """
+        ext = os.path.splitext(file_path)[1].lower()
 
-# --- API key input ---
-api_key = st.text_input("🔑 Enter your OpenAI API Key", type="password")
-system = CVAssessmentSystem(api_key=api_key)
+        try:
+            if ext == ".docx":
+                with open(file_path, "rb") as f:
+                    result = mammoth.extract_raw_text(f)
+                return result.value
 
-st.markdown("---")
+            elif ext == ".pdf":
+                from PyPDF2 import PdfReader
+                reader = PdfReader(file_path)
+                text = ""
+                for page in reader.pages:
+                    text += page.extract_text() or ""
+                return text
 
-# --- Tender Upload ---
-st.header("1️⃣ Upload Tender File")
-tender_file = st.file_uploader("Upload the Tender Document (.docx or .pdf)", type=["docx", "pdf", "txt"])
+            else:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    return f.read()
 
-tender_path = None
-tender_text = ""
+        except Exception as e:
+            return f"⚠️ Error loading file: {e}"
 
-if tender_file:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(tender_file.name)[1]) as tmp:
-        tmp.write(tender_file.read())
-        tender_path = tmp.name
+    # --- NEW FLEXIBLE EXTRACTION (KE1/KE 1/Key Expert 1...) ---
+    def extract_expert_sections_by_bold(self, docx_path, target_expert_name):
+        """
+        Extracts all occurrences of a given expert section (e.g. 'Key Expert 2' or 'KE2')
+        and separates each block with ---------------.
+        Case-insensitive, tolerant of spacing or abbreviation (Key Expert 1 == KE1).
+        """
+        try:
+            doc = Document(docx_path)
+        except Exception as e:
+            return f"⚠️ Could not open document: {e}"
 
-    st.success(f"Tender uploaded: {tender_file.name}")
+        text = " ".join(p.text.strip() for p in doc.paragraphs if p.text.strip())
+        text = " ".join(text.split())  # normalize spaces
 
-    tender_text = system.load_job_requirements(tender_path)
-    st.write(f"📏 Tender text length: {len(tender_text)} characters")
+        target_expert_name = (
+            target_expert_name.lower()
+            .replace("(", "")
+            .replace(")", "")
+            .strip()
+        )
 
-    if st.checkbox("Show last 1000 characters of tender text"):
-        st.text(tender_text[-1000:])
+        num_match = re.search(r"(?:key\s*expert\s*|ke\s*)(\d+)", target_expert_name, re.IGNORECASE)
+        current_num = int(num_match.group(1)) if num_match else 1
+        next_num = current_num + 1
 
-st.markdown("---")
+        pattern = re.compile(
+            rf"(?i)((?:Key\s*Expert\s*{current_num}\b|KE\s*{current_num}\b).*?)"
+            rf"(?=(?:Key\s*Expert\s*(?:{next_num}|[1-9]\d*)\b|KE\s*(?:{next_num}|[1-9]\d*)\b|$))"
+        )
 
-# --- Expert Section Extraction ---
-st.header("2️⃣ Extract Expert Section")
+        matches = pattern.findall(text)
+        if not matches:
+            matches = re.findall(
+                rf"(?i)(?:Key\s*Expert\s*{current_num}\b|KE\s*{current_num}\b).*?(?=(?:Key\s*Expert|KE|$))",
+                text,
+            )
 
-expert_name = st.text_input("Enter Expert Role (e.g., 'Key Expert 1', 'KE1', or 'Key expert 2')")
+        clean_sections = [m.strip() for m in matches if len(m.strip()) > 30]
+        if not clean_sections:
+            return ""
 
-if tender_file and expert_name:
-    if st.button("📘 Extract Expert Section"):
-        if tender_file.name.lower().endswith(".docx"):
-            extracted = system.extract_expert_sections_by_bold(tender_path, expert_name)
-        else:
-            extracted = system.load_job_requirements(tender_path)  # fallback
+        return "\n\n---------------\n\n".join(clean_sections)
 
-        if extracted.strip():
-            st.session_state.expert_section = extracted
-            st.success("✅ Expert section(s) extracted successfully!")
-        else:
-            st.warning("⚠️ Could not locate that expert section. Try 'KE1' or 'Key Expert 1' etc.")
+    # --- INTERNAL OPENAI CALL WRAPPER ---
+    def _ask_openai(self, prompt, temperature=0.2):
+        if not self.client:
+            return "⚠️ No OpenAI API key provided."
+        try:
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            return f"⚠️ Error from OpenAI API: {e}"
 
-# --- Expert section preview and editing ---
-if st.session_state.expert_section.strip():
-    st.subheader("📘 Preview of Extracted Expert Section:")
-    st.session_state.expert_section = st.text_area(
-        "You can edit the extracted text below before assessment:",
-        value=st.session_state.expert_section,
-        height=400,
-    )
+    # --- STRUCTURED EVALUATION (Classic Table with 80/20 split) ---
+    def structured_assessment(self, cv_text, expert_section):
+        """
+        Compare CV to tender expert section using structured analysis with weighted scores.
+        - 80% General experience
+        - 20% Specific experience
+        """
+        prompt = f"""
+You are an expert evaluator for EU tender CVs.
 
-st.markdown("---")
+Compare the following CV to the expert requirements and provide a detailed structured assessment.
 
-# --- CV Upload ---
-st.header("3️⃣ Upload Candidate CVs")
-cv_files = st.file_uploader("Upload one or more CVs (.docx or .pdf)", type=["docx", "pdf"], accept_multiple_files=True)
+### EXPERT REQUIREMENTS:
+{expert_section}
 
-uploaded_cv_folder = None
+### CANDIDATE CV:
+{cv_text}
 
-if cv_files:
-    uploaded_cv_folder = tempfile.mkdtemp()
-    for cv_file in cv_files:
-        cv_path = os.path.join(uploaded_cv_folder, cv_file.name)
-        with open(cv_path, "wb") as f:
-            f.write(cv_file.read())
-    st.success(f"✅ {len(cv_files)} CV(s) uploaded and ready for assessment.")
+Evaluate across these categories:
 
-st.markdown("---")
+1. **Academic Qualifications**
+   - Relevance of degree(s)
+   - Minimum years required
 
-# --- Evaluation Mode Selection ---
-st.header("4️⃣ Choose Evaluation Mode")
-mode = st.radio(
-    "Select Evaluation Mode:",
-    ["Structured Evaluation", "Critical Narrative"],
-    horizontal=True
-)
+2. **General Professional Experience**
+   - Breadth of relevant experience
+   - Duration and seniority
+   - Management / leadership exposure
 
-st.markdown("---")
+3. **Specific Professional Experience**
+   - Experience in similar thematic fields or regions
+   - Technical alignment with assignment
+   - EU project exposure
 
-# --- Run Assessment ---
-if st.button("🚀 Run Assessment"):
-    if not cv_files:
-        st.error("⚠️ Please upload at least one CV file before running the assessment.")
-    elif not st.session_state.expert_section.strip():
-        st.error("⚠️ Please extract or provide an Expert Section before running the assessment.")
-    else:
-        with st.spinner("⏳ Processing CVs — please wait..."):
-            try:
-                results = system.process_cv_folder(
-                    uploaded_cv_folder,
-                    st.session_state.expert_section,
-                    mode="critical" if mode == "Critical Narrative" else "structured"
-                )
+4. **Language and Other Skills**
+   - Languages required vs present
+   - Other essential skills (communication, analytical, etc.)
 
-                st.success("✅ CV assessment completed!")
+Scoring rules:
+- Each category is scored 0–100.
+- Apply 80/20 weighting between General and Specific experience to form the overall score.
+- Present your response as a markdown table followed by a concise narrative summary.
 
-                for res in results:
-                    with st.expander(f"👤 {res['candidate_name']}", expanded=False):
-                        st.markdown(res["report"])
-                        if res.get("overall_score"):
-                            st.write(f"**Score:** {res['overall_score']}")
-                        if res.get("fit_level"):
-                            st.write(f"**Fit Level:** {res['fit_level']}")
+Output format example:
 
-            except Exception as e:
-                st.error(f"❌ Error during assessment: {e}")
+| Category | Score | Weight | Weighted Score | Notes |
+|-----------|-------|---------|----------------|--------|
+| Academic Qualifications | 90 | - | - | Degree matches requirements |
+| General Experience | 85 | 0.8 | 68 | 12+ years, solid management background |
+| Specific Experience | 75 | 0.2 | 15 | 5 years in target field |
+| Language & Other Skills | 100 | - | - | Fluent English |
+| **TOTAL** | **-** | **-** | **83** | Overall fit strong |
+
+Then provide:
+- **Strengths**
+- **Weaknesses**
+- **Final Evaluation Summary** (Short paragraph)
+"""
+        return self._ask_openai(prompt, temperature=0.2)
+
+    # --- CRITICAL (DETAILED GAP) EVALUATION ---
+    def critical_assessment(self, cv_text, expert_section):
+        """
+        Produces a critical risk/gap evaluation with recommendations.
+        """
+        prompt = f"""
+You are a senior evaluator for EU tender experts.
+
+### EXPERT REQUIREMENTS:
+{expert_section}
+
+### CANDIDATE CV:
+{cv_text}
+
+Perform a **critical narrative evaluation**:
+- Identify explicit and implicit gaps between CV and requirements.
+- Point out missing or weak criteria (e.g., lack of years, region experience).
+- Highlight risks to eligibility or competitiveness.
+- Conclude with a recommendation: **Highly Suitable / Suitable / Borderline / Not Suitable**.
+"""
+        return self._ask_openai(prompt, temperature=0.3)
+
+    # --- MAIN CV PROCESSING PIPELINE ---
+    def process_cv_folder(self, cv_folder, expert_section, mode="structured"):
+        """
+        Processes all CVs in a folder for structured or critical evaluation.
+        """
+        if not os.path.exists(cv_folder):
+            return [{"candidate_name": "⚠️ Folder not found", "report": "", "fit_level": ""}]
+
+        results = []
+        for file_name in os.listdir(cv_folder):
+            file_path = os.path.join(cv_folder, file_name)
+            if not os.path.isfile(file_path):
+                continue
+
+            candidate_name = os.path.splitext(file_name)[0]
+
+            # --- Extract CV text ---
+            ext = os.path.splitext(file_name)[1].lower()
+            if ext == ".docx":
+                with open(file_path, "rb") as f:
+                    cv_text = mammoth.extract_raw_text(f).value
+            elif ext == ".pdf":
+                from PyPDF2 import PdfReader
+                reader = PdfReader(file_path)
+                cv_text = "".join([p.extract_text() or "" for p in reader.pages])
+            else:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    cv_text = f.read()
+
+            # --- Choose mode ---
+            if mode == "critical":
+                report = self.critical_assessment(cv_text, expert_section)
+                fit = "Critical Narrative"
+            else:
+                report = self.structured_assessment(cv_text, expert_section)
+                fit = "Structured Evaluation"
+
+            results.append({
+                "candidate_name": candidate_name,
+                "report": report,
+                "fit_level": fit
+            })
+
+        return results
