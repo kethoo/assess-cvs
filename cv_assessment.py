@@ -73,6 +73,12 @@ class CVAssessmentSystem:
                 if new_expert_match:
                     new_num = new_expert_match.group(1)
                     if not current_expert_num or new_num != current_expert_num:
+                        # stop cleanly before the next expert heading
+                        if current_section:
+                            # trim anything after 'Key Expert X' in the same paragraph
+                            cutoff = re.split(r"(?=Key\\s*Expert\\s*\\d+|KE\\s*\\d+)", text, 1)[0].strip()
+                            if cutoff:
+                                current_section.append(cutoff)
                         sections.append(" ".join(current_section).strip())
                         current_section = []
                         capture = False
