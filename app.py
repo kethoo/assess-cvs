@@ -37,37 +37,41 @@ expert_name = st.text_input(
     placeholder="Enter the exact expert role title (case-insensitive match)"
 )
 
-# --- STRONG FINAL Expert Section Extraction ---
+# --- Final Expert Section Extraction (Continuous Block Version) ---
 def extract_expert_section(full_text: str, expert_name: str) -> str:
     """
-    Extracts the complete text block starting from the exact expert name given,
-    including all details (general description, qualifications, experience, etc.)
-    until the next expert section or the end of the document.
+    Returns one continuous section beginning with the first occurrence of the exact
+    expert_name and ending right before the next 'Key Expert', 'Non-Key', 'Annex',
+    or similar heading.  Designed for tender documents where the same phrase repeats.
     """
     if not full_text or not expert_name:
         return ""
 
-    # Normalize whitespace for cleaner regex behavior
+    # Normalize whitespace for clean regex handling
     text = re.sub(r"\s+", " ", full_text)
 
-    # Regex pattern: start exactly at the expert name, continue until next section marker
-    pattern = re.compile(
-        rf"({re.escape(expert_name)}.*?)(?=(?:Key\s*Expert\s*\d|KE\s*\d|Expert\s+in\s+\w+|Non[-\s]*Key|Annex|General\s+Conditions|Terms|Reimbursement|END|$))",
-        re.IGNORECASE | re.DOTALL,
-    )
-
-    matches = pattern.findall(text)
-
-    if not matches:
+    # Find where this expert first appears
+    start_match = re.search(re.escape(expert_name), text, re.IGNORECASE)
+    if not start_match:
         return ""
 
-    sections = []
-    for section in matches:
-        section = re.sub(r"\s{2,}", " ", section)
-        section = re.sub(r"\n{2,}", "\n", section)
-        sections.append(section.strip())
+    start_index = start_match.start()
 
-    return "\n\n---\n\n".join(sections)
+    # Find where the next expert section begins
+    end_match = re.search(
+        r"(?:Key\s*Expert\s*\d|KE\s*\d|Expert\s+in\s+\w+|Non[-\s]*Key|Annex|General\s+Conditions|Terms|Reimbursement|END)",
+        text[start_index:],
+        re.IGNORECASE,
+    )
+
+    end_index = start_index + end_match.start() if end_match else len(text)
+    section = text[start_index:end_index]
+
+    # Clean up spacing
+    section = re.sub(r"\s{2,}", " ", section)
+    section = section.strip()
+
+    return section
 
 
 # --- Upload CVs ---
@@ -108,7 +112,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                 f"{expert_section}"
             )
             st.success(f"✅ Extracted expert section for: {expert_name}")
-            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:3000], height=300)
+            st.text_area("📘 Preview of Extracted Expert Section", expert_section[:4000], height=300)
 
         # Assign requirements text for evaluation
         system.job_requirements = combined_text
