@@ -1,8 +1,6 @@
 import os
 import re
 import mammoth
-import json
-import time
 from openai import OpenAI
 from docx import Document
 from models import *
@@ -20,8 +18,8 @@ class CVAssessmentSystem:
     # ======================================================
     def extract_expert_sections_by_bold(self, docx_path, target_expert_name):
         """
-        Extracts all occurrences of a given expert section (e.g. 'Key Expert 2' or 'KE2')
-        and separates each block with ---------------.
+        Extract all occurrences of a given expert section (e.g. 'Key Expert 2' or 'KE2')
+        and separate each block with ---------------.
         Case-insensitive, tolerant of spacing or abbreviation (Key Expert 1 == KE1).
         """
         try:
@@ -64,9 +62,8 @@ class CVAssessmentSystem:
         return "\n\n---------------\n\n".join(clean_sections)
 
     # ======================================================
-    # 🧠 ORIGINAL CV ASSESSMENT SYSTEM (Preserved)
+    # 📄 JOB REQUIREMENT LOADER
     # ======================================================
-
     def load_job_requirements(self, file_path):
         ext = os.path.splitext(file_path)[1].lower()
         try:
@@ -77,10 +74,7 @@ class CVAssessmentSystem:
             elif ext == ".pdf":
                 from PyPDF2 import PdfReader
                 reader = PdfReader(file_path)
-                text = ""
-                for page in reader.pages:
-                    text += page.extract_text() or ""
-                return text
+                return "".join([page.extract_text() or "" for page in reader.pages])
             else:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     return f.read()
@@ -88,7 +82,7 @@ class CVAssessmentSystem:
             return f"⚠️ Error loading file: {e}"
 
     # ======================================================
-    # 🔍 Helper for reading CVs
+    # 📜 CV TEXT EXTRACTION
     # ======================================================
     def _extract_text_from_cv(self, path):
         ext = os.path.splitext(path)[1].lower()
@@ -104,16 +98,14 @@ class CVAssessmentSystem:
                 return f.read()
 
     # ======================================================
-    # 🧮 STRUCTURED EVALUATION (80/20 WEIGHTING)
+    # 🧮 ORIGINAL STRUCTURED ASSESSMENT (80/20)
     # ======================================================
     def structured_assessment(self, cv_text, expert_section):
         """
-        Performs structured evaluation using the 80/20 weighting logic.
-        Returns markdown tables and narrative summary.
+        Returns markdown table-based evaluation (80/20 weighting) exactly like before.
         """
         prompt = f"""
-You are a senior evaluator for EU tenders.
-Compare the following CV to the Expert Requirements.
+You are an EU tender evaluator. Compare the CV to the Expert Requirements.
 
 ### EXPERT REQUIREMENTS
 {expert_section}
@@ -121,39 +113,41 @@ Compare the following CV to the Expert Requirements.
 ### CANDIDATE CV
 {cv_text}
 
-Evaluate the CV based on these weighted categories:
+Evaluate strictly in this format:
 
-| Category | Description | Weight |
-|-----------|--------------|--------|
-| Academic Qualifications | Education level and relevance | - |
-| General Professional Experience | Years, managerial exposure | 0.8 |
-| Specific Professional Experience | Relevance to thematic field, geography, EU context | 0.2 |
-| Language & Other Skills | Languages, communication, IT | - |
+## Evaluation of Candidate CV Against Expert Requirements
 
-Provide a **markdown table** with:
-- Scores 0–100
-- Weighted total (80/20)
-- Notes per category
+### Evaluation Summary Table
+| Category | Description | Weight | Score (0–100) | Weighted Score | Notes |
+|-----------|--------------|---------|----------------|----------------|--------|
+| Academic Qualifications | Education level and relevance | - | [score] | - | [brief note] |
+| General Professional Experience | Years, managerial exposure, relevance | 0.8 | [score] | [score*0.8] | [brief note] |
+| Specific Professional Experience | Relevance to field/geography/EU context | 0.2 | [score] | [score*0.2] | [brief note] |
+| Language & Other Skills | English, communication, IT | - | [score] | - | [brief note] |
 
-Then output:
-- **Total Score (0–100)**
-- **Fit Level:** High / Medium / Low
-- **Strengths**
-- **Weaknesses**
-- **Summary (3–5 lines)**
+**Total Weighted Score:** [total_score]/100  
+**Fit Level:** High / Medium / Low  
+
+### Major Strengths
+- Bullet points summarizing clear strengths
+
+### Weaknesses / Gaps
+- Bullet points summarizing missing or weak points
+
+### Summary
+Short 3–5 line summary of overall fit.
 """
-        return self._ask_openai(prompt)
+        return self._ask_openai(prompt, temperature=0.25)
 
     # ======================================================
-    # 🧩 CRITICAL NARRATIVE EVALUATION
+    # 🧩 ORIGINAL CRITICAL ASSESSMENT (unchanged)
     # ======================================================
     def critical_assessment(self, cv_text, expert_section):
         """
-        Produces detailed narrative evaluation focusing on gaps and risks.
+        Critical narrative mode (same as old version).
         """
         prompt = f"""
-You are a senior expert evaluator for EU tenders.
-Provide a critical evaluation of this CV versus the requirements.
+You are an EU tender evaluator performing a critical assessment.
 
 ### EXPERT REQUIREMENTS
 {expert_section}
@@ -161,20 +155,31 @@ Provide a critical evaluation of this CV versus the requirements.
 ### CANDIDATE CV
 {cv_text}
 
-Analyse:
-- Major strengths
-- Weaknesses / gaps
-- Risks related to eligibility or delivery
-- Final recommendation (Highly Suitable / Suitable / Borderline / Not Suitable)
+Write the evaluation exactly as before:
 
-Return as markdown with clear sections.
+## Evaluation of Candidate CV Against Expert Requirements
+
+### Major Strengths
+[List bullet points]
+
+### Weaknesses / Gaps
+[List bullet points]
+
+### Risks Related to Eligibility or Delivery
+[List bullet points]
+
+### Final Recommendation
+Conclude with one line: Highly Suitable / Suitable / Borderline / Not Suitable
+
+Then restate:
+**Fit Level:** Critical Narrative
 """
         return self._ask_openai(prompt, temperature=0.3)
 
     # ======================================================
-    # 🧩 ASK OPENAI HELPER
+    # 🧠 OPENAI HELPER
     # ======================================================
-    def _ask_openai(self, prompt, temperature=0.2):
+    def _ask_openai(self, prompt, temperature=0.25):
         if not self.client:
             return "⚠️ No OpenAI API key provided."
         try:
@@ -188,7 +193,7 @@ Return as markdown with clear sections.
             return f"⚠️ Error from OpenAI API: {e}"
 
     # ======================================================
-    # 🔎 FIT / SCORE EXTRACTION UTILITIES
+    # 🔎 SCORE & FIT HELPERS
     # ======================================================
     def _extract_score_from_text(self, text):
         match = re.search(r"(\b\d{1,3}\b)\s*/\s*100", text)
@@ -198,7 +203,7 @@ Return as markdown with clear sections.
                 return min(max(val, 0), 100)
             except:
                 return None
-        match = re.search(r"Total\s*[:\-]?\s*(\d{1,3})", text)
+        match = re.search(r"Total\s*Weighted\s*Score\s*[:\-]?\s*(\d{1,3})", text)
         if match:
             return int(match.group(1))
         return None
@@ -215,11 +220,11 @@ Return as markdown with clear sections.
         return "Unclassified"
 
     # ======================================================
-    # 🪄 FULLY SELF-CONTAINED FOLDER PROCESSOR
+    # 🪄 SELF-CONTAINED FOLDER PROCESSOR
     # ======================================================
     def process_cv_folder(self, cv_folder, expert_section, mode="structured"):
         """
-        Processes all CVs in a folder — no external dependencies.
+        Processes all CVs in a folder using the restored logic.
         """
         if not os.path.exists(cv_folder):
             return [{"candidate_name": "⚠️ Folder not found", "report": "", "fit_level": ""}]
@@ -235,12 +240,11 @@ Return as markdown with clear sections.
 
             if mode == "critical":
                 report = self.critical_assessment(cv_text, expert_section)
-                fit = "Critical Narrative"
             else:
                 report = self.structured_assessment(cv_text, expert_section)
-                fit = "Structured Evaluation"
 
             score = self._extract_score_from_text(report)
+            fit = self._derive_fit_from_report(report)
             results.append({
                 "candidate_name": candidate_name,
                 "report": report,
