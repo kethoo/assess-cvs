@@ -87,55 +87,57 @@ class CVAssessmentSystem:
         return "\n".join(text)
 
     def _extract_text_from_word(self, file_path: str) -> str:
-        """Extract full text from a Word (.docx) file including tables and bullets, preserving order."""
+        """Extract full text from a Word (.docx) file including tables, text boxes, and nested items."""
         from docx import Document
+        from docx.oxml.table import CT_Tbl
+        from docx.oxml.text.paragraph import CT_P
         import itertools
     
         doc = Document(file_path)
-        paragraphs = []
     
-        # --- Read all paragraphs ---
-        for para in doc.paragraphs:
-            text = para.text.strip()
-            if text:
-                paragraphs.append(text)
+        def iter_block_items(parent):
+            """Yield paragraphs and tables in document order (recursively for nested tables)."""
+            for child in parent.element.body.iterchildren():
+                if isinstance(child, CT_P):
+                    yield parent.paragraphs[len(list(itertools.takewhile(lambda p: p._p is not child, parent.paragraphs)))]
+                elif isinstance(child, CT_Tbl):
+                    yield parent.tables[len(list(itertools.takewhile(lambda t: t._tbl is not child, parent.tables)))]
     
-        # --- Read all tables carefully ---
-        for table in doc.tables:
+        def get_text_from_cell(cell):
+            parts = []
+            for paragraph in cell.paragraphs:
+                if paragraph.text.strip():
+                    parts.append(paragraph.text.strip())
+            for table in cell.tables:
+                parts.append(get_text_from_table(table))
+            return " ".join(parts)
+    
+        def get_text_from_table(table):
+            rows_text = []
             for row in table.rows:
-                # Collect text from each cell, even if multiple paragraphs
-                cell_texts = []
-                for cell in row.cells:
-                    cell_paras = [p.text.strip() for p in cell.paragraphs if p.text.strip()]
-                    if cell_paras:
-                        cell_texts.append(" ".join(cell_paras))
-                row_text = " ".join(cell_texts)
+                row_text = " ".join(get_text_from_cell(c) for c in row.cells if c.text.strip())
                 if row_text:
-                    paragraphs.append(row_text)
+                    rows_text.append(row_text)
+            return " ".join(rows_text)
     
-        # --- Merge small fragments and preserve punctuation ---
-        merged_lines = []
-        buffer = ""
+        text_blocks = []
+        for block in iter_block_items(doc):
+            if isinstance(block, type(doc.paragraphs[0])):
+                if block.text.strip():
+                    text_blocks.append(block.text.strip())
+            elif isinstance(block, type(doc.tables[0])):
+                table_text = get_text_from_table(block)
+                if table_text:
+                    text_blocks.append(table_text)
     
-        for line in paragraphs:
-            # If it's short or doesn’t end with a full stop, append to buffer
-            if len(line) < 80 and not re.search(r"[.!?;:]$", line):
-                buffer += " " + line
-            else:
-                buffer += " " + line
-                merged_lines.append(buffer.strip())
-                buffer = ""
-        if buffer:
-            merged_lines.append(buffer.strip())
-    
-        # --- Cleanup ---
-        text = "\n".join(merged_lines)
+        # Clean and merge
+        text = " ".join(text_blocks)
         text = re.sub(r"\s{2,}", " ", text)
         text = re.sub(r"(\w)-\s+(\w)", r"\1\2", text)
         return text.strip()
-
     
-    
+        
+        
 
 
     # ------------------- STRUCTURED (DASHBOARD) MODE -------------------
