@@ -23,57 +23,84 @@ class CVAssessmentSystem:
 
     def extract_expert_sections_by_bold(self, file_path: str, expert_name: str) -> str:
         """
-        Extracts expert sections using both bold text markers and expert numbering logic.
-        Starts from the expert_name match and continues until another expert section or bold heading appears.
-        Joins multiple found sections with '--------------'.
+        Hybrid expert extractor:
+        - Starts at the first mention of `expert_name` (e.g. 'Key Expert 1', 'KE 1').
+        - Collects all text referring to the same expert (even if repeated later).
+        - Stops when a *different expert* appears or a *new bold section heading* starts.
+        - Returns all parts combined, separated by '--------------'.
         """
         from docx import Document
-
+        import re
+    
         try:
             doc = Document(file_path)
         except Exception as e:
             return f"⚠️ Could not read Word file: {e}"
-
+    
         sections = []
         current_section = []
         capture = False
+    
+        # --- Regex helpers
         expert_pattern = re.compile(
             rf"(Key\s*Expert\s*\d+|KE\s*\d+|{re.escape(expert_name)})",
-            re.IGNORECASE
+            re.IGNORECASE,
         )
-
+        next_expert_pattern = re.compile(r"Key\s*Expert\s*(\d+)", re.IGNORECASE)
+    
+        # Extract the expert number if possible (e.g. 1 from "Key Expert 1")
+        current_expert_match = re.search(r"Key\s*Expert\s*(\d+)", expert_name, re.IGNORECASE)
+        current_expert_num = current_expert_match.group(1) if current_expert_match else None
+    
         for para in doc.paragraphs:
             text = para.text.strip()
             if not text:
                 continue
-
-            # Detect bold headings (potential new expert section)
-            is_bold_heading = any(run.bold for run in para.runs if run.text.strip()) and len(text.split()) < 12
-
-            # Start capturing when the expert title matches
-            if expert_pattern.search(text):
-                if capture and current_section:
-                    sections.append(" ".join(current_section).strip())
-                    current_section = []
+    
+            # Determine if paragraph is a bold heading (potential section boundary)
+            is_bold_heading = any(run.bold for run in para.runs if run.text.strip()) and len(text.split()) < 15
+    
+            # --- Start capturing at the first matching expert
+            if not capture and expert_pattern.search(text):
                 capture = True
-
-            # Stop when we hit a new expert or a new bold heading
-            elif capture and (re.search(r"Key\s*Expert\s*\d+", text, re.IGNORECASE) or is_bold_heading):
-                sections.append(" ".join(current_section).strip())
-                current_section = []
-                capture = False
-
-            if capture:
                 current_section.append(text)
-
-        # Add last captured section
+                continue
+    
+            # --- While capturing, check for stopping conditions
+            if capture:
+                # 1️⃣ New expert detected
+                new_expert_match = next_expert_pattern.search(text)
+                if new_expert_match:
+                    new_num = new_expert_match.group(1)
+                    if not current_expert_num or new_num != current_expert_num:
+                        sections.append(" ".join(current_section).strip())
+                        current_section = []
+                        capture = False
+                        continue
+    
+                # 2️⃣ Bold heading not related to qualifications/skills/etc.
+                if is_bold_heading and not expert_pattern.search(text):
+                    if not re.search(
+                        r"Qualification|General|Specific|Experience|Education|Skill|Language",
+                        text,
+                        re.IGNORECASE,
+                    ):
+                        sections.append(" ".join(current_section).strip())
+                        current_section = []
+                        capture = False
+                        continue
+    
+                # Otherwise, keep adding
+                current_section.append(text)
+    
+        # Append last section if still capturing
         if current_section:
             sections.append(" ".join(current_section).strip())
-
+    
         if not sections:
-            return "⚠️ No expert sections detected using bold-based logic."
-
-        # Join multiple sections cleanly
+            return "⚠️ No expert sections detected using hybrid bold/expert logic."
+    
+        # Merge multiple sections cleanly
         joined = "\n\n--------------\n\n".join(sections)
         joined = re.sub(r"\s{2,}", " ", joined)
         return joined.strip()
