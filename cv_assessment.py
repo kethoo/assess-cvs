@@ -1,4 +1,5 @@
 import os
+import re
 import mammoth
 from docx import Document
 
@@ -17,7 +18,7 @@ class CVAssessmentSystem:
 
         try:
             if ext == ".docx":
-                # Extract plain text for fallback / regex searches
+                # Extract plain text for fallback or regex searches
                 with open(file_path, "rb") as f:
                     result = mammoth.extract_raw_text(f)
                 return result.value
@@ -37,61 +38,45 @@ class CVAssessmentSystem:
         except Exception as e:
             return f"⚠️ Error loading file: {e}"
 
-    # --- BOLD-BASED SECTION EXTRACTOR ---
+    # --- ROBUST EXPERT SECTION EXTRACTOR (BOLD-INDEPENDENT) ---
     def extract_expert_sections_by_bold(self, docx_path, target_expert_name):
         """
-        Extracts all sections starting with bold headings matching the target expert.
-        Each separate occurrence is separated by ---------------.
-
-        Example:
-            - Finds all bold 'Key Expert 2' headings
-            - Captures all text until the next bold heading (any expert)
-            - Joins multiple results with a separator
+        Extracts all occurrences of a given expert section (e.g. 'Key Expert 2')
+        and separates each block with ---------------, regardless of bold formatting.
+        Works even when Word formatting is inconsistent.
         """
         try:
             doc = Document(docx_path)
         except Exception as e:
             return f"⚠️ Could not open document: {e}"
 
+        # Flatten the document into one continuous string
+        text = " ".join(p.text.strip() for p in doc.paragraphs if p.text.strip())
+        text = " ".join(text.split())  # normalize extra spaces
+
+        # Normalize target expert
         target_expert_name = target_expert_name.lower().strip()
-        sections = []
-        current_section = []
-        capture = False
+        num_match = re.search(r"\bKey\s*Expert\s*(\d+)\b", target_expert_name, re.IGNORECASE)
+        current_num = int(num_match.group(1)) if num_match else 1
+        next_num = current_num + 1
 
-        for para in doc.paragraphs:
-            text = para.text.strip()
-            if not text:
-                continue
+        # Regex pattern to find each Key Expert block
+        pattern = re.compile(
+            rf"(?i)(Key\s*Expert\s*{current_num}.*?)(?=Key\s*Expert\s*(?:{next_num}|[1-9]\d*)\b|$)"
+        )
 
-            # Detect bold paragraphs
-            is_bold = any(run.bold for run in para.runs if run.text.strip())
+        matches = pattern.findall(text)
 
-            if is_bold and "key expert" in text.lower():
-                # Starting a new bold heading
-                if capture:
-                    # Close previous section when we reach ANY bold Key Expert
-                    sections.append(" ".join(current_section).strip())
-                    current_section = []
-                    capture = False
+        # Fallback manual detection
+        if not matches:
+            matches = re.findall(rf"(?i)Key\s*Expert\s*{current_num}.*?(?=Key\s*Expert|$)", text)
 
-                # Start new capture if matches target expert
-                if target_expert_name in text.lower():
-                    capture = True
-                    current_section.append(text)
-                # If it's a different Key Expert and we were capturing, stop
-                elif capture:
-                    break
-            elif capture:
-                current_section.append(text)
-
-        # Add final section if still open
-        if current_section:
-            sections.append(" ".join(current_section).strip())
-
-        # --- 🔹 Join multiple sections cleanly ---
-        if not sections:
+        # Clean and join with separators
+        clean_sections = [m.strip() for m in matches if len(m.strip()) > 30]
+        if not clean_sections:
             return ""
-        return "\n\n---------------\n\n".join(sections)
+
+        return "\n\n---------------\n\n".join(clean_sections)
 
     # --- CV PROCESSING (SIMPLIFIED PLACEHOLDER) ---
     def process_cv_folder(self, cv_folder, mode="structured"):
