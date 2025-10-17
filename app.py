@@ -273,7 +273,7 @@ if results:
     # Criteria Table
     if st.session_state.criteria_generated and st.session_state.custom_criteria:
         doc.add_heading("Assessment Criteria", level=2)
-        table = doc.add_table(rows=1, cols=3)
+        table = doc.add_table(rows=1, cols=3, style="Table Grid")
         hdr_cells = table.rows[0].cells
         hdr_cells[0].text = 'Criterion'
         hdr_cells[1].text = 'Weight (%)'
@@ -283,16 +283,18 @@ if results:
             row_cells[0].text = str(c.get("name", ""))
             row_cells[1].text = str(c.get("weight", ""))
             row_cells[2].text = str(c.get("rationale", ""))
+        doc.add_paragraph("")
 
     # Candidate Comparison Summary
     doc.add_heading("Candidate Comparison Summary", level=2)
-    compare_table = doc.add_table(rows=1, cols=5)
+    compare_table = doc.add_table(rows=1, cols=5, style="Table Grid")
     ch = compare_table.rows[0].cells
     ch[0].text = "Rank"
     ch[1].text = "Candidate"
     ch[2].text = "Final Score"
     ch[3].text = "Top Strengths"
     ch[4].text = "Key Weaknesses"
+
     for row in summary_rows:
         r_cells = compare_table.add_row().cells
         r_cells[0].text = str(row["Rank"])
@@ -300,6 +302,8 @@ if results:
         r_cells[2].text = str(row["Final Score"])
         r_cells[3].text = row["Top Strengths"]
         r_cells[4].text = row["Key Weaknesses"]
+
+    doc.add_paragraph("")
 
     # Detailed Reports
     doc.add_heading("Detailed Evaluations", level=2)
@@ -309,6 +313,7 @@ if results:
         doc.add_paragraph(report_text)
         doc.add_paragraph("-" * 80)
 
+    # Save to buffer
     buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
