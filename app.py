@@ -11,6 +11,7 @@ from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
+from dotenv import load_dotenv
 
 # ------------------- STREAMLIT CONFIG -------------------
 
@@ -33,7 +34,6 @@ if 'editable_df' not in st.session_state:
 
 # ------------------- API KEY & EVALUATOR INFO -------------------
 
-from dotenv import load_dotenv
 
 # Try to load API key securely
 # Try to load API key securely
