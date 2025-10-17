@@ -5,6 +5,7 @@ import os
 import re
 from docx import Document
 import pandas as pd
+import json
 
 # ------------------- STREAMLIT CONFIG -------------------
 
@@ -40,7 +41,6 @@ if req_file:
 
     st.success(f"✅ Tender uploaded: {req_file.name}")
 
-    # Load tender text
     system_temp = CVAssessmentSystem(api_key=api_key or None)
     tender_text = system_temp.load_job_requirements(tender_path)
     st.info("📘 Tender text loaded successfully.")
@@ -54,75 +54,84 @@ role_focus = st.radio(
     index=0,
 )
 
-# ------------------- CONDITIONAL EXPERT INPUT & EXTRACTION -------------------
+# ------------------- SUPPORT FUNCTIONS -------------------
 
 def extract_expert_section_llm(full_text: str, expert_name: str, api_key: str) -> str:
     """Use LLM to intelligently extract expert section requirements"""
     if not full_text or not expert_name or not api_key:
         return ""
-    
     try:
         import openai
         client = openai.OpenAI(api_key=api_key)
-        
         prompt = f"""You are analyzing a tender document to extract requirements for a specific expert position.
 
 EXPERT POSITION TO EXTRACT: "{expert_name}"
 
-Your task:
-1. Find ALL sections in the document that describe requirements, qualifications, responsibilities, or deliverables for this specific expert position
-2. Extract the COMPLETE text for this position, including:
-   - Job title and role description
-   - Required qualifications (education, certifications)
-   - Required experience (years, specific domains)
-   - Technical skills and competencies
-   - Responsibilities and tasks
-   - Deliverables and outputs expected
-   - Language requirements
-   - Any other relevant requirements
-
-IMPORTANT:
-- Extract ONLY information relevant to "{expert_name}"
-- Do NOT include information about other expert positions (e.g., if extracting Key Expert 1, exclude Key Expert 2, 3, etc.)
-- Do NOT include general project background, budget, or administrative sections
-- If the position appears in multiple places in the document, extract ALL occurrences
-- Preserve the original text as much as possible
-- If you find multiple sections, separate them with "---SECTION BREAK---"
-
-TENDER DOCUMENT:
-{full_text[:30000]}
-
-Return ONLY the extracted text for "{expert_name}". If nothing is found, return exactly: "NOT_FOUND"
-"""
-        
-        response = client.chat.completions.create(
+Extract ALL relevant sections describing this expert’s role, qualifications, experience, and deliverables.
+Separate multiple matches with "---SECTION BREAK---".
+Return ONLY the extracted text, no commentary.
+DOCUMENT:
+{full_text[:30000]}"""
+        resp = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {
-                    "role": "system",
-                    "content": "You are a precise document extraction assistant. Extract only the requested content."
-                },
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": "Extract only the requested section, no explanations."},
+                {"role": "user", "content": prompt},
             ],
             temperature=0.1,
-            max_tokens=4000
+            max_tokens=4000,
         )
-        
-        extracted = response.choices[0].message.content.strip()
-        
+        extracted = resp.choices[0].message.content.strip()
         if extracted == "NOT_FOUND" or not extracted:
             return ""
-        
-        # Replace section breaks with consistent separator
-        extracted = extracted.replace("---SECTION BREAK---", "\n\n" + "-"*60 + "\n\n")
-        
-        return extracted
-    
+        return extracted.replace("---SECTION BREAK---", "\n\n" + "-" * 60 + "\n\n")
     except Exception as e:
         st.error(f"LLM extraction error: {e}")
         return ""
 
-# ------------------- CONDITIONAL DISPLAY: SPECIFIC ROLE -------------------
+
+def generate_criteria_and_weights(expert_section: str, general_context: str, api_key: str) -> dict:
+    """Generate custom assessment criteria with weights"""
+    if not expert_section or not api_key:
+        return None
+    try:
+        import openai
+        client = openai.OpenAI(api_key=api_key)
+        prompt = f"""You are analyzing tender requirements to generate assessment criteria with appropriate weights.
+Identify 6–10 key criteria and assign weights that total 80%.
+Use JSON format:
+{{"criteria": [{{"name": "...", "weight": 25, "rationale": "..."}}]}}
+EXPERT REQUIREMENTS (80%):
+{expert_section[:8000]}
+GENERAL CONTEXT:
+{general_context[:2000]}"""
+        resp = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "Return only valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+            max_tokens=2000,
+        )
+        text = resp.choices[0].message.content.strip()
+        text = re.sub(r"^```(json)?", "", text)
+        text = re.sub(r"```$", "", text)
+        match = re.search(r"(\{.*\})", text, re.DOTALL)
+        if match:
+            text = match.group(1)
+        data = json.loads(text)
+        total = sum(c['weight'] for c in data['criteria'])
+        if abs(total - 80) > 2:
+            factor = 80 / total
+            for c in data['criteria']:
+                c['weight'] = round(c['weight'] * factor, 1)
+        return data
+    except Exception as e:
+        st.error(f"Error generating criteria: {e}")
+        return None
+
+# ------------------- SPECIFIC ROLE FLOW -------------------
 
 expert_name = ""
 
@@ -134,34 +143,57 @@ if role_focus == "Specific Role (80/20 weighting)":
         key="expert_name_input"
     )
 
-    st.info("💡 **AI Extraction**: The system will use GPT to intelligently identify and extract all requirements specific to your chosen expert position, automatically excluding other positions and irrelevant sections.")
+    st.info("💡 **AI Extraction**: The system will use GPT to intelligently identify and extract all requirements for this expert position.")
 
     extract_button = st.button("🔍 Extract Expert Section (AI-Powered)", disabled=not (req_file and expert_name.strip() and tender_path and api_key))
-
     if extract_button:
-        with st.spinner("🤖 Using AI to intelligently extract requirements for this position..."):        
-            expert_section = extract_expert_section_llm(tender_text, expert_name, api_key)
-            
-            if expert_section:
-                st.session_state.expert_section_text = expert_section
-                num_sections = expert_section.count('------------------------------------------------------------') + 1
-                st.success(f"✅ Extracted {len(expert_section)} characters from {num_sections} section(s) for: {expert_name}")
-                st.info("📜 Scroll down to review the extracted content in the text area below ⬇️")
+        with st.spinner("🤖 Extracting requirements..."):
+            section = extract_expert_section_llm(tender_text, expert_name, api_key)
+            if section:
+                st.session_state.expert_section_text = section
+                st.success(f"✅ Extracted section for: {expert_name}")
             else:
-                st.session_state.expert_section_text = ""
-                st.warning("⚠️ AI couldn't find specific requirements for this position. Try:\n- Different spelling (e.g., 'Key Expert 1' vs 'Expert 1')\n- Or paste content manually below")
-
-    # ------------------- EDITABLE PREVIEW -------------------
+                st.warning("⚠️ Could not find relevant section.")
 
     if req_file and expert_name.strip():
         st.markdown("### 📝 Expert Section Preview & Edit")
         edited_section = st.text_area(
             "Expert Section Content (editable)",
             value=st.session_state.expert_section_text,
-            height=400,
-            help="Edit as needed. This will be used with 80% weight in the assessment."
+            height=400
         )
         st.session_state.expert_section_text = edited_section
+
+        # ------------------- GENERATE CRITERIA -------------------
+
+        if st.session_state.expert_section_text and api_key:
+            st.markdown("---")
+            st.markdown("### 🎯 Generate Custom Assessment Criteria")
+            if st.button("🧠 Generate Assessment Criteria", disabled=not st.session_state.expert_section_text):
+                with st.spinner("🤖 Generating criteria and weights..."):
+                    criteria = generate_criteria_and_weights(st.session_state.expert_section_text, tender_text, api_key)
+                    if criteria:
+                        st.session_state.custom_criteria = criteria
+                        st.session_state.criteria_generated = True
+                        st.success("✅ Custom criteria generated!")
+
+            if st.session_state.criteria_generated and st.session_state.custom_criteria:
+                df = pd.DataFrame([
+                    {"Criterion": c["name"], "Weight (%)": c["weight"], "Rationale": c["rationale"]}
+                    for c in st.session_state.custom_criteria["criteria"]
+                ])
+                general_row = pd.DataFrame([{
+                    "Criterion": "General Tender Context",
+                    "Weight (%)": 20,
+                    "Rationale": "Understanding of overall project and regional context"
+                }])
+                df_display = pd.concat([general_row, df], ignore_index=True)
+                total = df_display["Weight (%)"].sum()
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
+                if total == 100:
+                    st.success("✅ Weights sum to 100% - ready for assessment.")
+                else:
+                    st.warning(f"⚠️ Weights sum to {total}% (should be 100%).")
 
 # ------------------- UPLOAD CVS -------------------
 
@@ -182,49 +214,37 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
     with tempfile.TemporaryDirectory() as tmpdir:
         cv_folder = os.path.join(tmpdir, "cvs")
         os.makedirs(cv_folder, exist_ok=True)
-
         for file in cv_files:
             path = os.path.join(cv_folder, file.name)
             with open(path, "wb") as f:
                 f.write(file.read())
 
         st.info("⏳ Processing CVs...")
-
         system = CVAssessmentSystem(api_key=api_key or None)
 
-        # 🔹 Determine the weighting based on role_focus
+        # Role-based weighting
         if role_focus == "Specific Role (80/20 weighting)":
-            if st.session_state.expert_section_text.strip():
-                combined_text = (
-                    f"--- GENERAL TENDER CONTEXT (20% weight) ---\n\n"
-                    f"{tender_text[:5000]}\n\n"
-                    f"--- SPECIFIC EXPERT REQUIREMENTS (80% weight) ---\n\n"
-                    f"{st.session_state.expert_section_text}"
-                )
-            else:
-                combined_text = f"--- FULL REQUIREMENTS (100%) ---\n\n{tender_text}"
+            combined_text = (
+                f"--- GENERAL TENDER CONTEXT (20% weight) ---\n\n"
+                f"{tender_text[:5000]}\n\n"
+                f"--- SPECIFIC EXPERT REQUIREMENTS (80% weight) ---\n\n"
+                f"{st.session_state.expert_section_text or tender_text}"
+            )
         else:
             combined_text = f"--- GENERAL ROLE (100% weighting) ---\n\n{tender_text}"
 
         system.job_requirements = combined_text
-        
-        results = system.process_cv_folder(cv_folder, mode="critical")
+        custom = st.session_state.custom_criteria if st.session_state.criteria_generated else None
+        results = system.process_cv_folder(cv_folder, mode="critical", custom_criteria=custom)
 
         st.success(f"✅ Processed {len(results)} candidate(s)")
-
-        # ------------------- DISPLAY RESULTS -------------------
 
         ranked = sorted(results, key=lambda x: x.get("final_score", 0), reverse=True)
         st.markdown("## 🏆 Candidate Ranking")
         st.table([
-            {
-                "Rank": i + 1,
-                "Candidate": r["candidate_name"],
-                "Final Score": f"{r['final_score']:.2f}"
-            }
+            {"Rank": i + 1, "Candidate": r["candidate_name"], "Final Score": f"{r['final_score']:.2f}"}
             for i, r in enumerate(ranked)
         ])
-
         for r in ranked:
             with st.expander(f"{r['candidate_name']} — Critical Evaluation"):
                 report = r["report"]
@@ -236,11 +256,3 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
                 else:
                     st.markdown(report)
                 st.markdown(f"**🧮 Final Score:** {r['final_score']:.2f} / 1.00")
-
-else:
-    if not api_key and not os.getenv("OPENAI_API_KEY"):
-        st.warning("⚠️ Enter OpenAI API key to enable AI extraction and assessment")
-    elif not req_file:
-        st.warning("⚠️ Upload tender file")
-    elif not cv_files:
-        st.warning("⚠️ Upload CVs")
