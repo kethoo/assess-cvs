@@ -261,96 +261,49 @@ if results:
     summary_df = pd.DataFrame(summary_rows)
     st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
-# ------------------- EXPORT RESULTS TO WORD -------------------
+# ---------- 3️⃣ DETAILED REPORTS ----------
+doc.add_heading("Detailed Evaluations", level=2)
 
-from docx.shared import Inches, Pt
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
-
-if results:
-    st.markdown("---")
-    st.markdown("### 📥 Download All Results")
-
-    doc = Document()
-    doc.add_heading("CV Assessment Results", level=1)
-
-    # ---------- 1️⃣ CRITERIA TABLE ----------
-    if st.session_state.criteria_generated and st.session_state.custom_criteria:
-        doc.add_heading("Assessment Criteria", level=2)
-        table = doc.add_table(rows=1, cols=3, style="Table Grid")
-        table.alignment = WD_TABLE_ALIGNMENT.CENTER
-        table.autofit = False
-
-        # Set column widths
-        widths = [Inches(2.5), Inches(1.0), Inches(3.5)]
-        for i, w in enumerate(widths):
-            for cell in table.columns[i].cells:
-                cell.width = w
-
-        hdr_cells = table.rows[0].cells
-        headers = ['Criterion', 'Weight (%)', 'Rationale']
-        for i, text in enumerate(headers):
-            hdr_cells[i].text = text
-            for p in hdr_cells[i].paragraphs:
-                p.runs[0].font.bold = True
-                p.alignment = 1  # center align
-            hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-
-        for c in st.session_state.custom_criteria["criteria"]:
-            row = table.add_row().cells
-            row[0].text = str(c.get("name", ""))
-            row[1].text = str(c.get("weight", ""))
-            row[2].text = str(c.get("rationale", ""))
-
-        doc.add_paragraph("")  # spacer
-
-    # ---------- 2️⃣ CANDIDATE COMPARISON SUMMARY ----------
-    doc.add_heading("Candidate Comparison Summary", level=2)
-    compare_table = doc.add_table(rows=1, cols=5, style="Table Grid")
-    compare_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    compare_table.autofit = False
-    widths = [Inches(0.6), Inches(1.8), Inches(1.0), Inches(2.5), Inches(2.5)]
-    for i, w in enumerate(widths):
-        for cell in compare_table.columns[i].cells:
-            cell.width = w
-
-    headers = ["Rank", "Candidate", "Final Score", "Top Strengths", "Key Weaknesses"]
-    hdr_cells = compare_table.rows[0].cells
-    for i, text in enumerate(headers):
-        hdr_cells[i].text = text
+def add_markdown_table(doc, markdown_text):
+    """Convert a markdown-style table (| col | col | ...) into a Word table."""
+    lines = [line.strip() for line in markdown_text.strip().split("\n") if "|" in line]
+    if len(lines) < 2:
+        return False
+    # Parse header and rows
+    headers = [h.strip() for h in lines[0].split("|") if h.strip()]
+    rows = []
+    for line in lines[2:]:
+        row = [c.strip() for c in line.split("|") if c.strip()]
+        if row:
+            rows.append(row)
+    # Create Word table
+    table = doc.add_table(rows=1, cols=len(headers), style="Table Grid")
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    hdr_cells = table.rows[0].cells
+    for i, h in enumerate(headers):
+        hdr_cells[i].text = h
         for p in hdr_cells[i].paragraphs:
             p.runs[0].font.bold = True
-            p.alignment = 1  # center align
-        hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-
-    for row in summary_rows:
-        r_cells = compare_table.add_row().cells
-        r_cells[0].text = str(row["Rank"])
-        r_cells[1].text = row["Candidate"]
-        r_cells[2].text = str(row["Final Score"])
-        r_cells[3].text = row["Top Strengths"]
-        r_cells[4].text = row["Key Weaknesses"]
-
+            p.alignment = 1
+    for row in rows:
+        row_cells = table.add_row().cells
+        for i, cell_text in enumerate(row):
+            if i < len(row_cells):
+                row_cells[i].text = cell_text
     doc.add_paragraph("")
+    return True
 
-    # ---------- 3️⃣ DETAILED REPORTS ----------
-    doc.add_heading("Detailed Evaluations", level=2)
-    for i, r in enumerate(ranked):
-        doc.add_heading(f"{i+1}. {r['candidate_name']}", level=3)
-        report_text = r["report"].replace("**", "").replace("#", "")
-        doc.add_paragraph(report_text)
-        doc.add_paragraph("-" * 80)
+for i, r in enumerate(ranked):
+    doc.add_heading(f"{i+1}. {r['candidate_name']}", level=3)
+    report_text = r["report"].replace("**", "").replace("#", "")
 
-    # ---------- SAVE & DOWNLOAD ----------
-    buffer = BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-
-    st.download_button(
-        label="📥 Download Full Assessment Report (Word)",
-        data=buffer,
-        file_name="CV_Assessment_Report.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
-
+    # Split text around Markdown tables
+    segments = re.split(r"(\|.+\|)", report_text)
+    for seg in segments:
+        if "|" in seg and "---" in report_text:
+            added = add_markdown_table(doc, seg)
+            if not added:
+                doc.add_paragraph(seg)
+        else:
+            doc.add_paragraph(seg)
+    doc.add_paragraph("-" * 80)
