@@ -12,6 +12,7 @@ from docx.shared import Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from dotenv import load_dotenv
+os.environ["STREAMLIT_WATCHDOG"] = "false"
 
 # ------------------- STREAMLIT CONFIG -------------------
 
