@@ -11,7 +11,7 @@ import pandas as pd
 st.set_page_config(page_title="Deep CV Assessment System", layout="wide")
 st.title("📄 Deep CV Assessment System")
 
-# ------------------- SESSION STATE INITIALIZATION (MUST BE FIRST) -------------------
+# ------------------- SESSION STATE INITIALIZATION -------------------
 
 if 'expert_section_text' not in st.session_state:
     st.session_state.expert_section_text = ""
@@ -56,6 +56,15 @@ expert_name = st.text_input(
     "Example: Key Expert 1, Team Leader",
     placeholder="Type 'Key Expert 1', 'Key expert 1', etc.",
     key="expert_name_input"
+)
+
+# ------------------- ROLE FOCUS SELECTION -------------------
+
+st.markdown("### 🎯 Select Evaluation Focus")
+role_focus = st.radio(
+    "Choose the type of assessment focus:",
+    ["Specific Role (80/20 weighting)", "General Role (100% general weighting)"],
+    index=0,
 )
 
 # ------------------- EXTRACTION FUNCTIONS -------------------
@@ -126,93 +135,6 @@ Return ONLY the extracted text for "{expert_name}". If nothing is found, return 
         st.error(f"LLM extraction error: {e}")
         return ""
 
-
-def generate_criteria_and_weights(expert_section: str, general_context: str, api_key: str) -> dict:
-    """Analyze expert requirements and generate custom criteria with appropriate weights"""
-    if not expert_section or not api_key:
-        return None
-    
-    try:
-        import openai
-        import json
-        client = openai.OpenAI(api_key=api_key)
-        
-        prompt = f"""You are analyzing tender requirements to generate assessment criteria with appropriate weights.
-
-Analyze the EXPERT REQUIREMENTS below and identify the most important evaluation criteria.
-
-Your task:
-1. Identify 6-10 key criteria that matter most for this position
-2. Assign weights (as percentages) based on importance signals:
-   - "REQUIRED", "MANDATORY", "ESSENTIAL" → Higher weight (20-30%)
-   - "MUST HAVE", "MINIMUM" → High weight (15-20%)
-   - "PREFERRED", "DESIRABLE", "ADVANTAGEOUS" → Medium weight (10-15%)
-   - "BENEFICIAL", "ASSET" → Lower weight (5-10%)
-3. Consider the job nature (Team Leader needs more leadership weight, Technical Expert needs more technical weight)
-4. Ensure total weight = 80% (this covers the expert-specific requirements)
-
-Return ONLY valid JSON in this exact format:
-{{
-  "criteria": [
-    {{
-      "name": "Leadership and team management experience",
-      "weight": 25,
-      "rationale": "Position requires managing a team of 5+ experts - explicitly marked as ESSENTIAL"
-    }},
-    {{
-      "name": "Water sector domain expertise (10+ years)",
-      "weight": 20,
-      "rationale": "Minimum 10 years experience REQUIRED per ToR section 3.2"
-    }}
-  ]
-}}
-
-EXPERT REQUIREMENTS (80% focus):
-{expert_section[:8000]}
-
-GENERAL CONTEXT (for reference only):
-{general_context[:2000]}
-
-Return ONLY the JSON object with criteria and weights that sum to exactly 80."""
-
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are an expert at analyzing job requirements and determining assessment criteria importance. Return ONLY valid JSON."
-                },
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2,
-            max_tokens=2000
-        )
-        
-        result_text = response.choices[0].message.content.strip()
-        
-        # Clean JSON
-        result_text = re.sub(r"^```(json)?", "", result_text)
-        result_text = re.sub(r"```$", "", result_text)
-        match = re.search(r"(\{.*\})", result_text, re.DOTALL)
-        if match:
-            result_text = match.group(1).strip()
-        
-        criteria_data = json.loads(result_text)
-        
-        # Validate weights sum to 80
-        total_weight = sum(c['weight'] for c in criteria_data['criteria'])
-        if abs(total_weight - 80) > 2:  # Allow 2% tolerance
-            # Normalize to 80
-            factor = 80 / total_weight
-            for c in criteria_data['criteria']:
-                c['weight'] = round(c['weight'] * factor, 1)
-        
-        return criteria_data
-        
-    except Exception as e:
-        st.error(f"Error generating criteria: {e}")
-        return None
-
 # ------------------- EXTRACT BUTTON -------------------
 
 st.info("💡 **AI Extraction**: The system will use GPT to intelligently identify and extract all requirements specific to your chosen expert position, automatically excluding other positions and irrelevant sections.")
@@ -238,98 +160,15 @@ if extract_button:
 if req_file and expert_name.strip():
     st.markdown("### 📝 Expert Section Preview & Edit")
     
-    # Debug: Show what's in session state
-    if st.session_state.expert_section_text:
-        st.write(f"🔍 Debug: Session state has {len(st.session_state.expert_section_text)} characters")
-    
     edited_section = st.text_area(
         "Expert Section Content (editable)",
         value=st.session_state.expert_section_text,
         height=400,
-        help="Edit as needed. This will be used with 80% weight."
+        help="Edit as needed. This will be used with 80% weight if 'Specific Role' mode is selected."
     )
     
     # Update session state if user edits
     st.session_state.expert_section_text = edited_section
-    
-    if st.session_state.expert_section_text:
-        num_sections = st.session_state.expert_section_text.count('----------------------------------------------------------') + 1
-        st.info(f"📊 {len(st.session_state.expert_section_text)} chars | {num_sections} section(s) found | Sections separated by dashes")
-    else:
-        st.info("👆 Click 'Extract Expert Section' button above to automatically extract, or paste content manually here")
-
-# ------------------- GENERATE ASSESSMENT CRITERIA -------------------
-
-if st.session_state.expert_section_text and api_key:
-    st.markdown("---")
-    st.markdown("### 🎯 Step 3: Generate Custom Assessment Criteria")
-    
-    st.info("💡 **Adaptive Weighting**: The AI will analyze your expert requirements and create custom criteria with weights based on what's REQUIRED vs PREFERRED in the tender.")
-    
-    if st.button("🧠 Generate Assessment Criteria", disabled=not st.session_state.expert_section_text):
-        with st.spinner("🤖 Analyzing requirements and generating weighted criteria..."):
-            criteria_data = generate_criteria_and_weights(
-                st.session_state.expert_section_text,
-                tender_text,
-                api_key
-            )
-            
-            if criteria_data:
-                st.session_state.custom_criteria = criteria_data
-                st.session_state.criteria_generated = True
-                st.success("✅ Custom assessment criteria generated!")
-                st.rerun()
-    
-    # Display generated criteria
-    if st.session_state.criteria_generated and st.session_state.custom_criteria:
-        st.markdown("#### 📋 Assessment Criteria & Weights")
-        
-        import pandas as pd
-        
-        # Create dataframe for display
-        criteria_list = st.session_state.custom_criteria['criteria']
-        df = pd.DataFrame([
-            {
-                "Criterion": c['name'],
-                "Weight (%)": c['weight'],
-                "Rationale": c['rationale']
-            }
-            for c in criteria_list
-        ])
-        
-        # Add general context row
-        general_row = pd.DataFrame([{
-            "Criterion": "General Tender Context",
-            "Weight (%)": 20,
-            "Rationale": "Understanding of overall project and regional context"
-        }])
-        
-        df_display = pd.concat([general_row, df], ignore_index=True)
-        
-        # Calculate total
-        total_weight = df_display["Weight (%)"].sum()
-        total_row = pd.DataFrame([{
-            "Criterion": "**TOTAL**",
-            "Weight (%)": f"**{total_weight}%**",
-            "Rationale": ""
-        }])
-        
-        df_display = pd.concat([df_display, total_row], ignore_index=True)
-        
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
-        
-        if total_weight == 100:
-            st.success("✅ Weights sum to 100% - Ready for assessment!")
-        else:
-            st.warning(f"⚠️ Weights sum to {total_weight}% (should be 100%)")
-        
-        # Option to regenerate
-        if st.button("🔄 Regenerate Criteria"):
-            st.session_state.criteria_generated = False
-            st.session_state.custom_criteria = None
-            st.rerun()
-        
-        st.markdown("---")
 
 # ------------------- UPLOAD CVS -------------------
 
@@ -344,18 +183,9 @@ cv_files = st.file_uploader(
 st.markdown("---")
 st.markdown("### 🚀 Step 4: Run Assessment")
 
-# Show status of preparation
-if st.session_state.expert_section_text:
-    st.success("✅ Expert section loaded")
-else:
-    st.warning("⚠️ No expert section loaded")
+st.info(f"🧩 Current Mode: {role_focus}")
 
-if st.session_state.criteria_generated:
-    st.success("✅ Custom criteria generated")
-else:
-    st.info("💡 **Tip**: Generate custom criteria first for more accurate weighting!")
-
-if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.strip() and (api_key or os.getenv("OPENAI_API_KEY")):
+if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os.getenv("OPENAI_API_KEY")):
     with tempfile.TemporaryDirectory() as tmpdir:
         cv_folder = os.path.join(tmpdir, "cvs")
         os.makedirs(cv_folder, exist_ok=True)
@@ -368,32 +198,28 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
         st.info("⏳ Processing CVs...")
 
         system = CVAssessmentSystem(api_key=api_key or None)
-        expert_section = st.session_state.expert_section_text
 
-        if not expert_section:
-            st.warning("⚠️ No expert section. Using full tender.")
-            combined_text = tender_text
+        # 🔹 Determine the weighting based on role_focus
+        if role_focus == "Specific Role (80/20 weighting)":
+            if st.session_state.expert_section_text.strip():
+                combined_text = (
+                    f"--- GENERAL TENDER CONTEXT (20% weight) ---\n\n"
+                    f"{tender_text[:5000]}\n\n"
+                    f"--- SPECIFIC EXPERT REQUIREMENTS (80% weight) ---\n\n"
+                    f"{st.session_state.expert_section_text}"
+                )
+            else:
+                combined_text = f"--- FULL REQUIREMENTS (100%) ---\n\n{tender_text}"
         else:
-            combined_text = (
-                f"--- GENERAL TENDER CONTEXT (20% weight) ---\n\n"
-                f"{tender_text[:5000]}\n\n"
-                f"--- SPECIFIC EXPERT REQUIREMENTS (80% weight) ---\n\n"
-                f"{expert_section}"
-            )
-            st.success(f"✅ Using expert section")
+            combined_text = f"--- GENERAL ROLE (100% weighting) ---\n\n{tender_text}"
 
         system.job_requirements = combined_text
         
-        # Pass custom criteria if available
-        custom_criteria_data = st.session_state.custom_criteria if st.session_state.criteria_generated else None
-        if custom_criteria_data:
-            st.info(f"🎯 Using {len(custom_criteria_data['criteria'])} custom weighted criteria")
-        
-        results = system.process_cv_folder(cv_folder, mode="critical", custom_criteria=custom_criteria_data)
+        results = system.process_cv_folder(cv_folder, mode="critical")
 
         st.success(f"✅ Processed {len(results)} candidate(s)")
 
-        # ------------------- DISPLAY RESULTS (CRITICAL NARRATIVE MODE) -------------------
+        # ------------------- DISPLAY RESULTS -------------------
 
         ranked = sorted(results, key=lambda x: x.get("final_score", 0), reverse=True)
         st.markdown("## 🏆 Candidate Ranking")
@@ -418,13 +244,9 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and expert_name.st
                     st.markdown(report)
                 st.markdown(f"**🧮 Final Score:** {r['final_score']:.2f} / 1.00")
 
-# ------------------- WARNINGS -------------------
-
 else:
     if not api_key and not os.getenv("OPENAI_API_KEY"):
         st.warning("⚠️ Enter OpenAI API key to enable AI extraction and assessment")
-    elif not expert_name.strip():
-        st.warning("⚠️ Enter expert role title")
     elif not req_file:
         st.warning("⚠️ Upload tender file")
     elif not cv_files:
