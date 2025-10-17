@@ -33,7 +33,24 @@ if 'editable_df' not in st.session_state:
 
 # ------------------- API KEY & EVALUATOR INFO -------------------
 
-api_key = st.text_input("🔑 Enter OpenAI API Key", type="password")
+import os
+import streamlit as st
+from dotenv import load_dotenv
+
+# Try to load API key securely
+load_dotenv()  # Loads from .env if running locally
+api_key = os.getenv("OPENAI_API_KEY", None)
+
+# Fallback: use Streamlit Secrets if available (for Streamlit Cloud)
+if not api_key and "OPENAI_API_KEY" in st.secrets:
+    api_key = st.secrets["OPENAI_API_KEY"]
+
+# Safety check
+if not api_key:
+    st.error("❌ No API key found. Please set OPENAI_API_KEY in Streamlit Secrets or a .env file.")
+else:
+    st.success("🔐 API key loaded securely.")
+
 evaluator_name = st.text_input("👤 Enter Evaluator Name (for report cover page)", placeholder="e.g. John Smith")
 
 # ------------------- UPLOAD TENDER -------------------
