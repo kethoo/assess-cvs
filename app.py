@@ -7,6 +7,8 @@ import pandas as pd
 import json
 from docx import Document
 from io import BytesIO
+from docx.shared import Inches
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 
 # ------------------- STREAMLIT CONFIG -------------------
 
@@ -189,9 +191,7 @@ if st.session_state.criteria_generated and st.session_state.custom_criteria:
 
     if st.button("💾 Save Final Criteria"):
         st.session_state.editable_df = edited_df
-        st.session_state.custom_criteria = {
-            "criteria": edited_df.to_dict(orient="records")
-        }
+        st.session_state.custom_criteria = {"criteria": edited_df.to_dict(orient="records")}
         st.success("✅ Final criteria saved and ready for assessment!")
 
 # ------------------- UPLOAD CVS -------------------
@@ -236,7 +236,7 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
             with st.expander(f"{r['candidate_name']} — Critical Evaluation"):
                 st.markdown(r["report"])
 
-# ------------------- FINAL COMPARISON SUMMARY TABLE -------------------
+# ------------------- FINAL COMPARISON SUMMARY -------------------
 
 if results:
     st.markdown("---")
@@ -261,49 +261,95 @@ if results:
     summary_df = pd.DataFrame(summary_rows)
     st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
-# ---------- 3️⃣ DETAILED REPORTS ----------
-doc.add_heading("Detailed Evaluations", level=2)
+# ------------------- EXPORT RESULTS TO WORD -------------------
 
-def add_markdown_table(doc, markdown_text):
-    """Convert a markdown-style table (| col | col | ...) into a Word table."""
-    lines = [line.strip() for line in markdown_text.strip().split("\n") if "|" in line]
-    if len(lines) < 2:
-        return False
-    # Parse header and rows
-    headers = [h.strip() for h in lines[0].split("|") if h.strip()]
-    rows = []
-    for line in lines[2:]:
-        row = [c.strip() for c in line.split("|") if c.strip()]
-        if row:
-            rows.append(row)
-    # Create Word table
-    table = doc.add_table(rows=1, cols=len(headers), style="Table Grid")
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    hdr_cells = table.rows[0].cells
-    for i, h in enumerate(headers):
-        hdr_cells[i].text = h
-        for p in hdr_cells[i].paragraphs:
-            p.runs[0].font.bold = True
-            p.alignment = 1
-    for row in rows:
-        row_cells = table.add_row().cells
-        for i, cell_text in enumerate(row):
-            if i < len(row_cells):
-                row_cells[i].text = cell_text
+if results:
+    st.markdown("---")
+    st.markdown("### 📥 Download All Results")
+
+    doc = Document()
+    doc.add_heading("CV Assessment Results", level=1)
+
+    # ----- Criteria Table -----
+    if st.session_state.criteria_generated and st.session_state.custom_criteria:
+        doc.add_heading("Assessment Criteria", level=2)
+        table = doc.add_table(rows=1, cols=3, style="Table Grid")
+        hdr_cells = table.rows[0].cells
+        hdr_cells[0].text = 'Criterion'
+        hdr_cells[1].text = 'Weight (%)'
+        hdr_cells[2].text = 'Rationale'
+        for c in st.session_state.custom_criteria["criteria"]:
+            row_cells = table.add_row().cells
+            row_cells[0].text = str(c.get("name", ""))
+            row_cells[1].text = str(c.get("weight", ""))
+            row_cells[2].text = str(c.get("rationale", ""))
+        doc.add_paragraph("")
+
+    # ----- Comparison Summary -----
+    doc.add_heading("Candidate Comparison Summary", level=2)
+    compare_table = doc.add_table(rows=1, cols=5, style="Table Grid")
+    ch = compare_table.rows[0].cells
+    ch[0].text = "Rank"
+    ch[1].text = "Candidate"
+    ch[2].text = "Final Score"
+    ch[3].text = "Top Strengths"
+    ch[4].text = "Key Weaknesses"
+    for row in summary_rows:
+        r_cells = compare_table.add_row().cells
+        r_cells[0].text = str(row["Rank"])
+        r_cells[1].text = row["Candidate"]
+        r_cells[2].text = str(row["Final Score"])
+        r_cells[3].text = row["Top Strengths"]
+        r_cells[4].text = row["Key Weaknesses"]
     doc.add_paragraph("")
-    return True
 
-for i, r in enumerate(ranked):
-    doc.add_heading(f"{i+1}. {r['candidate_name']}", level=3)
-    report_text = r["report"].replace("**", "").replace("#", "")
+    # ----- Detailed Reports with Markdown-to-Table Conversion -----
+    doc.add_heading("Detailed Evaluations", level=2)
 
-    # Split text around Markdown tables
-    segments = re.split(r"(\|.+\|)", report_text)
-    for seg in segments:
-        if "|" in seg and "---" in report_text:
-            added = add_markdown_table(doc, seg)
-            if not added:
+    def add_markdown_table(doc, markdown_text):
+        lines = [line.strip() for line in markdown_text.strip().split("\n") if "|" in line]
+        if len(lines) < 2:
+            return False
+        headers = [h.strip() for h in lines[0].split("|") if h.strip()]
+        rows = []
+        for line in lines[2:]:
+            row = [c.strip() for c in line.split("|") if c.strip()]
+            if row:
+                rows.append(row)
+        table = doc.add_table(rows=1, cols=len(headers), style="Table Grid")
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        hdr_cells = table.rows[0].cells
+        for i, h in enumerate(headers):
+            hdr_cells[i].text = h
+            for p in hdr_cells[i].paragraphs:
+                p.runs[0].font.bold = True
+        for row in rows:
+            row_cells = table.add_row().cells
+            for i, cell_text in enumerate(row):
+                if i < len(row_cells):
+                    row_cells[i].text = cell_text
+        doc.add_paragraph("")
+        return True
+
+    for i, r in enumerate(ranked):
+        doc.add_heading(f"{i+1}. {r['candidate_name']}", level=3)
+        report_text = r["report"].replace("**", "").replace("#", "")
+        segments = re.split(r"(\|.*\|)", report_text)
+        for seg in segments:
+            if "|" in seg and "---" in report_text:
+                if not add_markdown_table(doc, seg):
+                    doc.add_paragraph(seg)
+            else:
                 doc.add_paragraph(seg)
-        else:
-            doc.add_paragraph(seg)
-    doc.add_paragraph("-" * 80)
+        doc.add_paragraph("-" * 80)
+
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    st.download_button(
+        label="📥 Download Full Assessment Report (Word)",
+        data=buffer,
+        file_name="CV_Assessment_Report.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
