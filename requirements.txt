@@ -5,3 +5,4 @@ pandas
 openpyxl
 openai
 mammoth
+python-dotenv
