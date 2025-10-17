@@ -5,6 +5,8 @@ import os
 import re
 import pandas as pd
 import json
+from docx import Document
+from io import BytesIO
 
 # ------------------- STREAMLIT CONFIG -------------------
 
@@ -172,7 +174,7 @@ if role_focus == "General Role (100% general weighting)" and api_key and req_fil
                 st.session_state.editable_df = pd.DataFrame(data["criteria"])
                 st.success("✅ General criteria generated!")
 
-# ------------------- EDIT & SAVE CRITERIA (BOTH MODES) -------------------
+# ------------------- EDIT & SAVE CRITERIA -------------------
 
 if st.session_state.criteria_generated and st.session_state.custom_criteria:
     st.markdown("---")
@@ -200,6 +202,9 @@ cv_files = st.file_uploader("👤 Upload Candidate CVs", type=["pdf", "docx", "d
 
 st.markdown("---")
 st.markdown("### 🚀 Step 4: Run Assessment")
+
+results = []
+ranked = []
 
 if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os.getenv("OPENAI_API_KEY")):
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -230,3 +235,87 @@ if st.button("🚀 Run Assessment") and req_file and cv_files and (api_key or os
         for r in ranked:
             with st.expander(f"{r['candidate_name']} — Critical Evaluation"):
                 st.markdown(r["report"])
+
+# ------------------- FINAL COMPARISON SUMMARY TABLE -------------------
+
+if results:
+    st.markdown("---")
+    st.markdown("## 🧾 Final Candidate Comparison Summary")
+
+    summary_rows = []
+    for i, r in enumerate(ranked):
+        report_text = r["report"]
+        strengths_match = re.search(r"Strengths(.*?)Weaknesses", report_text, re.DOTALL | re.IGNORECASE)
+        weaknesses_match = re.search(r"Weaknesses(.*?)(?:Tailoring|$)", report_text, re.DOTALL | re.IGNORECASE)
+        strengths = strengths_match.group(1).strip().replace("\n", " ")[:200] if strengths_match else "-"
+        weaknesses = weaknesses_match.group(1).strip().replace("\n", " ")[:200] if weaknesses_match else "-"
+        summary_rows.append({
+            "Rank": i + 1,
+            "Candidate": r["candidate_name"],
+            "Final Score": round(r["final_score"], 2),
+            "Fit Level": r.get("fit_level", "N/A"),
+            "Top Strengths": strengths,
+            "Key Weaknesses": weaknesses
+        })
+
+    summary_df = pd.DataFrame(summary_rows)
+    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+# ------------------- EXPORT RESULTS TO WORD -------------------
+
+if results:
+    st.markdown("---")
+    st.markdown("### 📥 Download All Results")
+
+    doc = Document()
+    doc.add_heading("CV Assessment Results", level=1)
+
+    # Criteria Table
+    if st.session_state.criteria_generated and st.session_state.custom_criteria:
+        doc.add_heading("Assessment Criteria", level=2)
+        table = doc.add_table(rows=1, cols=3)
+        hdr_cells = table.rows[0].cells
+        hdr_cells[0].text = 'Criterion'
+        hdr_cells[1].text = 'Weight (%)'
+        hdr_cells[2].text = 'Rationale'
+        for c in st.session_state.custom_criteria["criteria"]:
+            row_cells = table.add_row().cells
+            row_cells[0].text = str(c.get("name", ""))
+            row_cells[1].text = str(c.get("weight", ""))
+            row_cells[2].text = str(c.get("rationale", ""))
+
+    # Candidate Comparison Summary
+    doc.add_heading("Candidate Comparison Summary", level=2)
+    compare_table = doc.add_table(rows=1, cols=5)
+    ch = compare_table.rows[0].cells
+    ch[0].text = "Rank"
+    ch[1].text = "Candidate"
+    ch[2].text = "Final Score"
+    ch[3].text = "Top Strengths"
+    ch[4].text = "Key Weaknesses"
+    for row in summary_rows:
+        r_cells = compare_table.add_row().cells
+        r_cells[0].text = str(row["Rank"])
+        r_cells[1].text = row["Candidate"]
+        r_cells[2].text = str(row["Final Score"])
+        r_cells[3].text = row["Top Strengths"]
+        r_cells[4].text = row["Key Weaknesses"]
+
+    # Detailed Reports
+    doc.add_heading("Detailed Evaluations", level=2)
+    for i, r in enumerate(ranked):
+        doc.add_heading(f"{i+1}. {r['candidate_name']}", level=3)
+        report_text = r["report"].replace("**", "").replace("#", "")
+        doc.add_paragraph(report_text)
+        doc.add_paragraph("-" * 80)
+
+    buffer = BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+
+    st.download_button(
+        label="📥 Download Full Assessment Report (Word)",
+        data=buffer,
+        file_name="CV_Assessment_Report.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
