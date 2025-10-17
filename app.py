@@ -263,6 +263,11 @@ if results:
 
 # ------------------- EXPORT RESULTS TO WORD -------------------
 
+from docx.shared import Inches, Pt
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+
 if results:
     st.markdown("---")
     st.markdown("### 📥 Download All Results")
@@ -270,30 +275,54 @@ if results:
     doc = Document()
     doc.add_heading("CV Assessment Results", level=1)
 
-    # Criteria Table
+    # ---------- 1️⃣ CRITERIA TABLE ----------
     if st.session_state.criteria_generated and st.session_state.custom_criteria:
         doc.add_heading("Assessment Criteria", level=2)
         table = doc.add_table(rows=1, cols=3, style="Table Grid")
-        hdr_cells = table.rows[0].cells
-        hdr_cells[0].text = 'Criterion'
-        hdr_cells[1].text = 'Weight (%)'
-        hdr_cells[2].text = 'Rationale'
-        for c in st.session_state.custom_criteria["criteria"]:
-            row_cells = table.add_row().cells
-            row_cells[0].text = str(c.get("name", ""))
-            row_cells[1].text = str(c.get("weight", ""))
-            row_cells[2].text = str(c.get("rationale", ""))
-        doc.add_paragraph("")
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        table.autofit = False
 
-    # Candidate Comparison Summary
+        # Set column widths
+        widths = [Inches(2.5), Inches(1.0), Inches(3.5)]
+        for i, w in enumerate(widths):
+            for cell in table.columns[i].cells:
+                cell.width = w
+
+        hdr_cells = table.rows[0].cells
+        headers = ['Criterion', 'Weight (%)', 'Rationale']
+        for i, text in enumerate(headers):
+            hdr_cells[i].text = text
+            for p in hdr_cells[i].paragraphs:
+                p.runs[0].font.bold = True
+                p.alignment = 1  # center align
+            hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
+        for c in st.session_state.custom_criteria["criteria"]:
+            row = table.add_row().cells
+            row[0].text = str(c.get("name", ""))
+            row[1].text = str(c.get("weight", ""))
+            row[2].text = str(c.get("rationale", ""))
+
+        doc.add_paragraph("")  # spacer
+
+    # ---------- 2️⃣ CANDIDATE COMPARISON SUMMARY ----------
     doc.add_heading("Candidate Comparison Summary", level=2)
     compare_table = doc.add_table(rows=1, cols=5, style="Table Grid")
-    ch = compare_table.rows[0].cells
-    ch[0].text = "Rank"
-    ch[1].text = "Candidate"
-    ch[2].text = "Final Score"
-    ch[3].text = "Top Strengths"
-    ch[4].text = "Key Weaknesses"
+    compare_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    compare_table.autofit = False
+    widths = [Inches(0.6), Inches(1.8), Inches(1.0), Inches(2.5), Inches(2.5)]
+    for i, w in enumerate(widths):
+        for cell in compare_table.columns[i].cells:
+            cell.width = w
+
+    headers = ["Rank", "Candidate", "Final Score", "Top Strengths", "Key Weaknesses"]
+    hdr_cells = compare_table.rows[0].cells
+    for i, text in enumerate(headers):
+        hdr_cells[i].text = text
+        for p in hdr_cells[i].paragraphs:
+            p.runs[0].font.bold = True
+            p.alignment = 1  # center align
+        hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
     for row in summary_rows:
         r_cells = compare_table.add_row().cells
@@ -305,7 +334,7 @@ if results:
 
     doc.add_paragraph("")
 
-    # Detailed Reports
+    # ---------- 3️⃣ DETAILED REPORTS ----------
     doc.add_heading("Detailed Evaluations", level=2)
     for i, r in enumerate(ranked):
         doc.add_heading(f"{i+1}. {r['candidate_name']}", level=3)
@@ -313,7 +342,7 @@ if results:
         doc.add_paragraph(report_text)
         doc.add_paragraph("-" * 80)
 
-    # Save to buffer
+    # ---------- SAVE & DOWNLOAD ----------
     buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
@@ -324,3 +353,4 @@ if results:
         file_name="CV_Assessment_Report.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
+
