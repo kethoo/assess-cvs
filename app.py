@@ -26,10 +26,6 @@ if 'criteria_generated' not in st.session_state:
 
 api_key = st.text_input("🔑 Enter OpenAI API Key", type="password")
 
-# ------------------- MODE SELECTION (LOCKED TO CRITICAL NARRATIVE) -------------------
-
-mode = "Critical Narrative"  # Fixed mode
-
 # ------------------- UPLOAD TENDER -------------------
 
 req_file = st.file_uploader("📄 Upload Tender / Job Description", type=["pdf", "docx", "doc"])
@@ -49,15 +45,6 @@ if req_file:
     tender_text = system_temp.load_job_requirements(tender_path)
     st.info("📘 Tender text loaded successfully.")
 
-# ------------------- EXPERT NAME -------------------
-
-st.markdown("### 🎯 Enter the Expert Role Title")
-expert_name = st.text_input(
-    "Example: Key Expert 1, Team Leader",
-    placeholder="Type 'Key Expert 1', 'Key expert 1', etc.",
-    key="expert_name_input"
-)
-
 # ------------------- ROLE FOCUS SELECTION -------------------
 
 st.markdown("### 🎯 Select Evaluation Focus")
@@ -67,7 +54,7 @@ role_focus = st.radio(
     index=0,
 )
 
-# ------------------- EXTRACTION FUNCTIONS -------------------
+# ------------------- CONDITIONAL EXPERT INPUT & EXTRACTION -------------------
 
 def extract_expert_section_llm(full_text: str, expert_name: str, api_key: str) -> str:
     """Use LLM to intelligently extract expert section requirements"""
@@ -135,40 +122,46 @@ Return ONLY the extracted text for "{expert_name}". If nothing is found, return 
         st.error(f"LLM extraction error: {e}")
         return ""
 
-# ------------------- EXTRACT BUTTON -------------------
+# ------------------- CONDITIONAL DISPLAY: SPECIFIC ROLE -------------------
 
-st.info("💡 **AI Extraction**: The system will use GPT to intelligently identify and extract all requirements specific to your chosen expert position, automatically excluding other positions and irrelevant sections.")
+expert_name = ""
 
-extract_button = st.button("🔍 Extract Expert Section (AI-Powered)", disabled=not (req_file and expert_name.strip() and tender_path and api_key))
-
-if extract_button:
-    with st.spinner("🤖 Using AI to intelligently extract requirements for this position..."):        
-        expert_section = extract_expert_section_llm(tender_text, expert_name, api_key)
-        
-        if expert_section:
-            st.session_state.expert_section_text = expert_section
-            # Count sections (separated by the long dashes)
-            num_sections = expert_section.count('------------------------------------------------------------') + 1
-            st.success(f"✅ Extracted {len(expert_section)} characters from {num_sections} section(s) for: {expert_name}")
-            st.info("📜 Scroll down to review the extracted content in the text area below ⬇️")
-        else:
-            st.session_state.expert_section_text = ""
-            st.warning("⚠️ AI couldn't find specific requirements for this position. Try:\n- Different spelling (e.g., 'Key Expert 1' vs 'Expert 1')\n- Or paste content manually below")
-
-# ------------------- EDITABLE PREVIEW -------------------
-
-if req_file and expert_name.strip():
-    st.markdown("### 📝 Expert Section Preview & Edit")
-    
-    edited_section = st.text_area(
-        "Expert Section Content (editable)",
-        value=st.session_state.expert_section_text,
-        height=400,
-        help="Edit as needed. This will be used with 80% weight if 'Specific Role' mode is selected."
+if role_focus == "Specific Role (80/20 weighting)":
+    st.markdown("### 🧩 Enter the Expert Role Title")
+    expert_name = st.text_input(
+        "Example: Key Expert 1, Team Leader",
+        placeholder="Type 'Key Expert 1', 'Team Leader', etc.",
+        key="expert_name_input"
     )
-    
-    # Update session state if user edits
-    st.session_state.expert_section_text = edited_section
+
+    st.info("💡 **AI Extraction**: The system will use GPT to intelligently identify and extract all requirements specific to your chosen expert position, automatically excluding other positions and irrelevant sections.")
+
+    extract_button = st.button("🔍 Extract Expert Section (AI-Powered)", disabled=not (req_file and expert_name.strip() and tender_path and api_key))
+
+    if extract_button:
+        with st.spinner("🤖 Using AI to intelligently extract requirements for this position..."):        
+            expert_section = extract_expert_section_llm(tender_text, expert_name, api_key)
+            
+            if expert_section:
+                st.session_state.expert_section_text = expert_section
+                num_sections = expert_section.count('------------------------------------------------------------') + 1
+                st.success(f"✅ Extracted {len(expert_section)} characters from {num_sections} section(s) for: {expert_name}")
+                st.info("📜 Scroll down to review the extracted content in the text area below ⬇️")
+            else:
+                st.session_state.expert_section_text = ""
+                st.warning("⚠️ AI couldn't find specific requirements for this position. Try:\n- Different spelling (e.g., 'Key Expert 1' vs 'Expert 1')\n- Or paste content manually below")
+
+    # ------------------- EDITABLE PREVIEW -------------------
+
+    if req_file and expert_name.strip():
+        st.markdown("### 📝 Expert Section Preview & Edit")
+        edited_section = st.text_area(
+            "Expert Section Content (editable)",
+            value=st.session_state.expert_section_text,
+            height=400,
+            help="Edit as needed. This will be used with 80% weight in the assessment."
+        )
+        st.session_state.expert_section_text = edited_section
 
 # ------------------- UPLOAD CVS -------------------
 
