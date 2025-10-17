@@ -33,10 +33,9 @@ if 'editable_df' not in st.session_state:
 
 # ------------------- API KEY & EVALUATOR INFO -------------------
 
-import os
-import streamlit as st
 from dotenv import load_dotenv
 
+# Try to load API key securely
 # Try to load API key securely
 load_dotenv()  # Loads from .env if running locally
 api_key = os.getenv("OPENAI_API_KEY", None)
