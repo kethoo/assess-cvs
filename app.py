@@ -90,7 +90,7 @@ DOCUMENT:
         return ""
 
 
-def generate_criteria_and_weights(expert_section: str, general_context: str, api_key: str) -> dict:
+def generate_criteria_and_weights(expert_section: str, general_context: str, api_key: str, total_weight: int = 80) -> dict:
     """Generate custom assessment criteria with weights"""
     if not expert_section or not api_key:
         return None
@@ -98,10 +98,10 @@ def generate_criteria_and_weights(expert_section: str, general_context: str, api
         import openai
         client = openai.OpenAI(api_key=api_key)
         prompt = f"""You are analyzing tender requirements to generate assessment criteria with appropriate weights.
-Identify 6–10 key criteria and assign weights that total 80%.
+Identify 6–10 key criteria and assign weights that total {total_weight}%.
 Use JSON format:
 {{"criteria": [{{"name": "...", "weight": 25, "rationale": "..."}}]}}
-EXPERT REQUIREMENTS (80%):
+REQUIREMENTS:
 {expert_section[:8000]}
 GENERAL CONTEXT:
 {general_context[:2000]}"""
@@ -122,8 +122,8 @@ GENERAL CONTEXT:
             text = match.group(1)
         data = json.loads(text)
         total = sum(c['weight'] for c in data['criteria'])
-        if abs(total - 80) > 2:
-            factor = 80 / total
+        if abs(total - total_weight) > 2:
+            factor = total_weight / total
             for c in data['criteria']:
                 c['weight'] = round(c['weight'] * factor, 1)
         return data
@@ -164,14 +164,14 @@ if role_focus == "Specific Role (80/20 weighting)":
         )
         st.session_state.expert_section_text = edited_section
 
-        # ------------------- GENERATE CRITERIA -------------------
+        # ------------------- GENERATE CRITERIA (SPECIFIC ROLE) -------------------
 
         if st.session_state.expert_section_text and api_key:
             st.markdown("---")
-            st.markdown("### 🎯 Generate Custom Assessment Criteria")
-            if st.button("🧠 Generate Assessment Criteria", disabled=not st.session_state.expert_section_text):
+            st.markdown("### 🎯 Generate Custom Assessment Criteria (80/20 weighting)")
+            if st.button("🧠 Generate Criteria (Specific Role)", disabled=not st.session_state.expert_section_text):
                 with st.spinner("🤖 Generating criteria and weights..."):
-                    criteria = generate_criteria_and_weights(st.session_state.expert_section_text, tender_text, api_key)
+                    criteria = generate_criteria_and_weights(st.session_state.expert_section_text, tender_text, api_key, total_weight=80)
                     if criteria:
                         st.session_state.custom_criteria = criteria
                         st.session_state.criteria_generated = True
@@ -189,11 +189,37 @@ if role_focus == "Specific Role (80/20 weighting)":
                 }])
                 df_display = pd.concat([general_row, df], ignore_index=True)
                 total = df_display["Weight (%)"].sum()
-                st.dataframe(df_display, use_container_width=True, hide_index=True)
+                with st.expander("📋 View Generated Criteria"):
+                    st.dataframe(df_display, use_container_width=True, hide_index=True)
                 if total == 100:
                     st.success("✅ Weights sum to 100% - ready for assessment.")
                 else:
                     st.warning(f"⚠️ Weights sum to {total}% (should be 100%).")
+
+# ------------------- GENERAL ROLE FLOW -------------------
+
+if role_focus == "General Role (100% general weighting)":
+    st.markdown("### 🧠 Generate General Assessment Criteria (100%)")
+    if st.button("🧠 Generate Criteria (General Role)", disabled=not (req_file and api_key)):
+        with st.spinner("🤖 Analyzing tender to generate general evaluation criteria..."):
+            criteria = generate_criteria_and_weights(tender_text, tender_text, api_key, total_weight=100)
+            if criteria:
+                st.session_state.custom_criteria = criteria
+                st.session_state.criteria_generated = True
+                st.success("✅ General role criteria generated!")
+
+    if st.session_state.criteria_generated and st.session_state.custom_criteria:
+        df = pd.DataFrame([
+            {"Criterion": c["name"], "Weight (%)": c["weight"], "Rationale": c["rationale"]}
+            for c in st.session_state.custom_criteria["criteria"]
+        ])
+        with st.expander("📋 View Generated Criteria"):
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        total = df["Weight (%)"].sum()
+        if total == 100:
+            st.success("✅ Weights sum to 100% - ready for assessment.")
+        else:
+            st.warning(f"⚠️ Weights sum to {total}% (should be 100%).")
 
 # ------------------- UPLOAD CVS -------------------
 
