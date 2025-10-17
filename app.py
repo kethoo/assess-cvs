@@ -5,10 +5,12 @@ import os
 import re
 import pandas as pd
 import json
-from docx import Document
+from datetime import datetime
 from io import BytesIO
-from docx.shared import Inches
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
+from docx import Document
+from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_TABLE_ALIGNMENT
 
 # ------------------- STREAMLIT CONFIG -------------------
 
@@ -29,9 +31,10 @@ if 'criteria_generated' not in st.session_state:
 if 'editable_df' not in st.session_state:
     st.session_state.editable_df = None
 
-# ------------------- API KEY -------------------
+# ------------------- API KEY & EVALUATOR INFO -------------------
 
 api_key = st.text_input("🔑 Enter OpenAI API Key", type="password")
+evaluator_name = st.text_input("👤 Enter Evaluator Name (for report cover page)", placeholder="e.g. John Smith")
 
 # ------------------- UPLOAD TENDER -------------------
 
@@ -63,45 +66,40 @@ role_focus = st.radio(
 # ------------------- SUPPORT FUNCTIONS -------------------
 
 def extract_expert_section_llm(full_text: str, expert_name: str, api_key: str) -> str:
-    """Extract expert section"""
+    """Extract specific expert section using LLM."""
     if not full_text or not expert_name or not api_key:
         return ""
     try:
         import openai
         client = openai.OpenAI(api_key=api_key)
-        prompt = f"""You are analyzing a tender to extract requirements for "{expert_name}".
-Extract only that expert's relevant content, preserving structure.
-Separate multiple matches with "---SECTION BREAK---".
+        prompt = f"""Extract all text describing the role, qualifications, and responsibilities of "{expert_name}".
+Return full sections with all details, preserving structure.
+Separate multiple sections with "---SECTION BREAK---".
 Document:
 {full_text[:30000]}"""
         resp = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "Extract only the requested section, no commentary."},
-                {"role": "user", "content": prompt},
-            ],
+            messages=[{"role": "system", "content": "Extract exactly what's requested, no commentary."},
+                      {"role": "user", "content": prompt}],
             temperature=0.1,
             max_tokens=4000,
         )
         text = resp.choices[0].message.content.strip()
-        if text == "NOT_FOUND" or not text:
-            return ""
-        return text.replace("---SECTION BREAK---", "\n\n" + "-" * 60 + "\n\n")
+        return text.replace("---SECTION BREAK---", "\n\n" + "-"*60 + "\n\n") if text else ""
     except Exception as e:
         st.error(f"LLM extraction error: {e}")
         return ""
 
 
 def generate_criteria_and_weights(section_text: str, general_context: str, api_key: str, total_weight: int = 80) -> dict:
-    """Generate criteria JSON"""
+    """Generate custom criteria and weights."""
     if not section_text or not api_key:
         return None
     try:
         import openai
         client = openai.OpenAI(api_key=api_key)
-        prompt = f"""Generate 6–10 assessment criteria and assign weights totaling {total_weight}%.
-Each item must include name, weight, rationale.
-Return ONLY valid JSON like:
+        prompt = f"""Generate 6–10 key evaluation criteria (name, weight, rationale) totaling {total_weight}%.
+Return only JSON like:
 {{"criteria":[{{"name":"...","weight":25,"rationale":"..."}}]}}
 TEXT:
 {section_text[:8000]}
@@ -109,25 +107,19 @@ GENERAL CONTEXT:
 {general_context[:2000]}"""
         resp = client.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "Return only valid JSON."},
-                {"role": "user", "content": prompt},
-            ],
+            messages=[{"role": "system", "content": "Return only valid JSON."},
+                      {"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=2000,
         )
-        text = resp.choices[0].message.content.strip()
-        text = re.sub(r"^```(json)?", "", text)
-        text = re.sub(r"```$", "", text)
+        text = re.sub(r"```(json)?|```", "", resp.choices[0].message.content.strip())
         match = re.search(r"(\{.*\})", text, re.DOTALL)
-        if match:
-            text = match.group(1)
-        data = json.loads(text)
-        total = sum(c['weight'] for c in data['criteria'])
+        data = json.loads(match.group(1)) if match else {}
+        total = sum(c['weight'] for c in data.get("criteria", []))
         if abs(total - total_weight) > 2:
             factor = total_weight / total
-            for c in data['criteria']:
-                c['weight'] = round(c['weight'] * factor, 1)
+            for c in data["criteria"]:
+                c["weight"] = round(c["weight"] * factor, 1)
         return data
     except Exception as e:
         st.error(f"Error generating criteria: {e}")
@@ -268,7 +260,20 @@ if results:
     st.markdown("### 📥 Download All Results")
 
     doc = Document()
-    doc.add_heading("CV Assessment Results", level=1)
+
+    # ----- COVER PAGE -----
+    title = req_file.name if req_file else "Tender Document"
+    doc.add_paragraph("")
+    title_para = doc.add_paragraph("CV ASSESSMENT REPORT")
+    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title_para.runs[0].font.size = Pt(24)
+    title_para.runs[0].bold = True
+    doc.add_paragraph("")
+    doc.add_paragraph(f"📘 Project / Tender: {title}").alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph(f"🧩 Evaluation Focus: {role_focus}").alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph(f"👤 Evaluator: {evaluator_name or 'N/A'}").alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_paragraph(f"📅 Date: {datetime.now().strftime('%d %B %Y')}").alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_page_break()
 
     # ----- Criteria Table -----
     if st.session_state.criteria_generated and st.session_state.custom_criteria:
@@ -279,74 +284,72 @@ if results:
         hdr_cells[1].text = 'Weight (%)'
         hdr_cells[2].text = 'Rationale'
         for c in st.session_state.custom_criteria["criteria"]:
-            row_cells = table.add_row().cells
-            row_cells[0].text = str(c.get("name", ""))
-            row_cells[1].text = str(c.get("weight", ""))
-            row_cells[2].text = str(c.get("rationale", ""))
+            row = table.add_row().cells
+            row[0].text = str(c.get("name", ""))
+            row[1].text = str(c.get("weight", ""))
+            row[2].text = str(c.get("rationale", ""))
         doc.add_paragraph("")
 
     # ----- Comparison Summary -----
     doc.add_heading("Candidate Comparison Summary", level=2)
-    compare_table = doc.add_table(rows=1, cols=5, style="Table Grid")
-    ch = compare_table.rows[0].cells
-    ch[0].text = "Rank"
-    ch[1].text = "Candidate"
-    ch[2].text = "Final Score"
-    ch[3].text = "Top Strengths"
-    ch[4].text = "Key Weaknesses"
+    compare = doc.add_table(rows=1, cols=5, style="Table Grid")
+    ch = compare.rows[0].cells
+    ch[0].text = "Rank"; ch[1].text = "Candidate"; ch[2].text = "Final Score"
+    ch[3].text = "Top Strengths"; ch[4].text = "Key Weaknesses"
     for row in summary_rows:
-        r_cells = compare_table.add_row().cells
-        r_cells[0].text = str(row["Rank"])
-        r_cells[1].text = row["Candidate"]
-        r_cells[2].text = str(row["Final Score"])
-        r_cells[3].text = row["Top Strengths"]
-        r_cells[4].text = row["Key Weaknesses"]
+        r = compare.add_row().cells
+        r[0].text = str(row["Rank"])
+        r[1].text = row["Candidate"]
+        r[2].text = str(row["Final Score"])
+        r[3].text = row["Top Strengths"]
+        r[4].text = row["Key Weaknesses"]
     doc.add_paragraph("")
 
-    # ----- Detailed Reports with Markdown-to-Table Conversion -----
+    # ----- Detailed Reports -----
     doc.add_heading("Detailed Evaluations", level=2)
 
-    def add_markdown_table(doc, markdown_text):
-        lines = [line.strip() for line in markdown_text.strip().split("\n") if "|" in line]
-        if len(lines) < 2:
+    def add_markdown_table(doc, markdown_block):
+        """Convert markdown tables (|...|) into Word tables."""
+        lines = [ln.strip() for ln in markdown_block.splitlines() if ln.strip()]
+        if not lines or "|" not in lines[0]:
             return False
-        headers = [h.strip() for h in lines[0].split("|") if h.strip()]
-        rows = []
-        for line in lines[2:]:
-            row = [c.strip() for c in line.split("|") if c.strip()]
-            if row:
-                rows.append(row)
-        table = doc.add_table(rows=1, cols=len(headers), style="Table Grid")
-        table.alignment = WD_TABLE_ALIGNMENT.CENTER
-        hdr_cells = table.rows[0].cells
+        # remove separators
+        rows = [ln for ln in lines if not re.match(r"^\|[-\s|]+\|?$", ln)]
+        if len(rows) < 2:
+            return False
+        headers = [h.strip() for h in rows[0].strip("|").split("|")]
+        word_table = doc.add_table(rows=1, cols=len(headers), style="Table Grid")
+        word_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        hdr_cells = word_table.rows[0].cells
         for i, h in enumerate(headers):
             hdr_cells[i].text = h
             for p in hdr_cells[i].paragraphs:
-                p.runs[0].font.bold = True
-        for row in rows:
-            row_cells = table.add_row().cells
-            for i, cell_text in enumerate(row):
-                if i < len(row_cells):
-                    row_cells[i].text = cell_text
+                p.runs[0].bold = True
+        for row in rows[1:]:
+            cols = [c.strip() for c in row.strip("|").split("|")]
+            new_row = word_table.add_row().cells
+            for i, c in enumerate(cols):
+                if i < len(new_row):
+                    new_row[i].text = c
         doc.add_paragraph("")
         return True
 
     for i, r in enumerate(ranked):
         doc.add_heading(f"{i+1}. {r['candidate_name']}", level=3)
-        report_text = r["report"].replace("**", "").replace("#", "")
-        segments = re.split(r"(\|.*\|)", report_text)
-        for seg in segments:
-            if "|" in seg and "---" in report_text:
-                if not add_markdown_table(doc, seg):
-                    doc.add_paragraph(seg)
+        clean_text = r["report"].replace("**", "").replace("#", "")
+        blocks = re.split(r"(\n\|.+?\n\|[-\s|]+\|.+?(?=\n\n|\Z))", clean_text, flags=re.DOTALL)
+        for block in blocks:
+            if "|" in block and re.search(r"\|[-\s|]+\|", block):
+                if not add_markdown_table(doc, block):
+                    doc.add_paragraph(block)
             else:
-                doc.add_paragraph(seg)
+                doc.add_paragraph(block.strip())
         doc.add_paragraph("-" * 80)
 
+    # ----- SAVE FILE -----
     buffer = BytesIO()
     doc.save(buffer)
     buffer.seek(0)
-
     st.download_button(
         label="📥 Download Full Assessment Report (Word)",
         data=buffer,
